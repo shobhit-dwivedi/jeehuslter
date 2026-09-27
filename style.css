@@ -291,7 +291,7 @@ label {
   margin-bottom: 16px;
 }
 
-input[type="text"], input[type="email"], input[type="password"], input[type="number"], input[type="datetime-local"], textarea, select {
+input[type="text"], input[type="email"], input[type="password"], input[type="number"], input[type="datetime-local"], input[type="tel"], input[type="date"], textarea, select {
   width: 100%;
   padding: 10px 12px;
   border: 1px solid var(--border-strong);
@@ -300,6 +300,8 @@ input[type="text"], input[type="email"], input[type="password"], input[type="num
   color: var(--ink);
   font-size: 14.5px;
   font-family: inherit;
+  -webkit-appearance: none;
+  appearance: none;
 }
 
 textarea {
@@ -309,6 +311,29 @@ textarea {
 
 input:focus, textarea:focus, select:focus {
   border-color: var(--brand);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--brand-tint);
+}
+
+/* input[type=date] ships its own opaque UA chrome (calendar icon, layout)
+   that ignores our color/border rules by default — tint the icon so it
+   matches the app instead of looking like a stray native control. */
+input[type="date"] {
+  min-height: 41px;
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 3px;
+}
+
+input[type="date"]::-webkit-datetime-edit {
+  color: var(--ink);
+}
+
+[data-theme="dark"] input[type="date"]::-webkit-calendar-picker-indicator {
+  filter: invert(0.85);
 }
 
 .hint {
@@ -2189,7 +2214,7 @@ table.report-table .bar-track {
   border-color: var(--border);
 }
 
-[data-theme="dark"] input[type="text"], [data-theme="dark"] input[type="email"], [data-theme="dark"] input[type="password"], [data-theme="dark"] input[type="number"], [data-theme="dark"] input[type="datetime-local"], [data-theme="dark"] textarea, [data-theme="dark"] select {
+[data-theme="dark"] input[type="text"], [data-theme="dark"] input[type="email"], [data-theme="dark"] input[type="password"], [data-theme="dark"] input[type="number"], [data-theme="dark"] input[type="datetime-local"], [data-theme="dark"] input[type="tel"], [data-theme="dark"] input[type="date"], [data-theme="dark"] textarea, [data-theme="dark"] select {
   background: #17130D;
   color: var(--ink);
   border-color: var(--border-strong);
@@ -4032,6 +4057,48 @@ border-radius: 11px;
   text-decoration: none;
 }
 
+.app-footer-contact {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 16px 0 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.app-footer-contact a {
+  color: var(--muted);
+  text-decoration: underline;
+}
+
+.app-footer-contact a:hover {
+  color: var(--brand);
+}
+
+/* Shared support/contact footer shown at the bottom of every main app tab
+   (Home, Tests, Leaderboard, Analytics, Profile). */
+.app-footer {
+  margin-top: 28px;
+  padding: 18px 4px 4px;
+  border-top: 1px solid var(--border);
+  text-align: center;
+}
+
+.app-footer p {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.app-footer a {
+  color: var(--brand-dark);
+  font-weight: 600;
+  text-decoration: underline;
+}
+
+.app-footer a:hover {
+  color: var(--brand);
+}
+
 /* Respect reduced motion */
 @media (prefers-reduced-motion: reduce) {
   .landing-feature-card,
@@ -5053,6 +5120,30 @@ body.app-shell-on .app-bottom-nav {
 .details-state-live { background: var(--success-tint); color: var(--success); }
 .details-state-closed { background: var(--danger-tint); color: var(--danger); }
 
+.analytics-empty-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 8px;
+  padding: 56px 24px;
+}
+
+.analytics-empty-icon {
+  font-size: 40px;
+  line-height: 1;
+  margin-bottom: 6px;
+}
+
+.analytics-empty-card h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.analytics-empty-card p {
+  margin: 0 0 8px;
+}
+
 .details-metric-grid,
 .analytics-stat-grid {
   display: grid;
@@ -5566,7 +5657,7 @@ body.app-shell-on .view.active {
   .landing-page .landing-hero-text {
     padding-left: clamp(0px, 4vw, 58px);
   }
-}
+} 
 
 @media (max-width: 520px) {
   .landing-page .landing-navbar-inner { padding: 11px 15px; }
