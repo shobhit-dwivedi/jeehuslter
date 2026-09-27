@@ -126,6 +126,24 @@ img {
   padding: 0 20px;
 }
 
+/* Desktop: signed-in app views sit next to the fixed sidebar, so give them
+   noticeably more breathing room on large screens instead of centering a
+   narrow column in a much wider remaining area. Small/mobile breakpoints
+   elsewhere already force max-width back to 100%, so this only affects
+   desktop. */
+@media (min-width: 1024px) {
+  body.app-shell-on .container {
+    max-width: 1240px;
+    padding: 0 32px;
+  }
+}
+
+@media (min-width: 1440px) {
+  body.app-shell-on .container {
+    max-width: 1360px;
+  }
+}
+
 .view {
   display: none;
 }
@@ -332,8 +350,14 @@ input:focus, textarea:focus, select:focus {
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   padding: 20px;
+}
+
+@media (min-width: 1024px) {
+  body.app-shell-on .card {
+    padding: 24px;
+  }
 }
 
 .card + .card {
@@ -1482,7 +1506,12 @@ table.report-table tr.me {
   background: var(--brand-tint);
 }
 
-/* Top-10 leaderboard rank-1/2/3 highlighting */
+table.report-table tr.me td:first-child {
+  font-weight: 700;
+}
+
+/* Individual test report Top-10 table: rank 1/2/3 get a medal + subtle tint,
+   but no podium widget — just the row styling. */
 table.report-table tr.rank-gold td:first-child,
 table.report-table tr.rank-silver td:first-child,
 table.report-table tr.rank-bronze td:first-child {
@@ -1507,9 +1536,27 @@ table.report-table tr.rank-bronze.me {
   background: var(--brand-tint);
 }
 
+.you-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  background: var(--brand);
+  color: #1a1305;
+  vertical-align: middle;
+}
+
 .your-rank-card {
   border-color: var(--brand);
   border-width: 1.5px;
+  border-radius: var(--radius-lg);
+}
+
+.your-rank-card p {
+  color: var(--ink);
 }
 
 .bar-track {
@@ -2072,36 +2119,60 @@ table.report-table .bar-track {
   color: #1A1205;
 }
 
+/* =========================================================
+   DRAGGABLE THEME TOGGLE
+   ========================================================= */
+
 .theme-toggle {
   position: fixed;
+
+  /* Initial position */
+  left: auto;
+  top: auto;
   right: 16px;
   bottom: 16px;
-  width: 44px;
-  height: 44px;
+
+  width: 52px;
+  height: 52px;
+
   display: flex;
   align-items: center;
   justify-content: center;
+
   border: 1px solid var(--border-strong);
   border-radius: 50%;
+
   background: var(--surface);
   color: var(--ink);
-  font-size: 19px;
-  cursor: pointer;
+
+  font-size: 21px;
+  cursor: grab;
+
   box-shadow: var(--shadow-md);
-  z-index: 1000;
-  transition: background 0.2s ease,
+
+  z-index: 10000;
+
+  touch-action: none;
+  user-select: none;
+
+  transition:
+    background 0.2s ease,
     color 0.2s ease,
     border-color 0.2s ease,
-    transform 0.15s ease;
+    transform 0.15s ease,
+    box-shadow 0.2s ease;
 }
 
 .theme-toggle:hover {
-  transform: translateY(-2px);
+  transform: scale(1.05);
   border-color: var(--brand);
 }
 
-.theme-toggle:active {
-  transform: translateY(0);
+.theme-toggle:active,
+.theme-toggle.dragging {
+  cursor: grabbing;
+  transform: scale(1.08);
+  box-shadow: var(--shadow-lg);
 }
 
 [data-theme="dark"] .appbar {
@@ -2220,6 +2291,10 @@ table.report-table .bar-track {
 [data-theme="dark"] table.report-table tr.rank-silver.me,
 [data-theme="dark"] table.report-table tr.rank-bronze.me {
   background: var(--brand-tint);
+}
+
+[data-theme="dark"] .you-badge {
+  color: #1a1305;
 }
 
 [data-theme="dark"] .bar-track {
@@ -4480,6 +4555,37 @@ body.app-shell-on .app-bottom-nav {
   margin-bottom: 14px;
 }
 
+.result-container {
+  max-width: 860px;
+}
+
+@media (min-width: 1024px) {
+  .result-container {
+    max-width: 1080px;
+  }
+}
+
+@media (min-width: 1440px) {
+  .result-container {
+    max-width: 1180px;
+  }
+}
+
+/* Home view keeps a readable measure for the greeting/text, but on desktop
+   uses more of the space the sidebar layout leaves available than the old
+   fixed 900px cap did. */
+@media (min-width: 1024px) {
+  body.app-shell-on .home-container {
+    max-width: 1160px;
+  }
+}
+
+@media (min-width: 1440px) {
+  body.app-shell-on .home-container {
+    max-width: 1280px;
+  }
+}
+
 /* ---------- Stat row ---------- */
 
 .home-stats {
@@ -4665,6 +4771,12 @@ body.app-shell-on .app-bottom-nav {
 @media (min-width: 1024px) {
   .tests-card-grid {
     grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (min-width: 1440px) {
+  .tests-card-grid {
+    grid-template-columns: repeat(4, 1fr);
   }
 }
 
@@ -5035,7 +5147,7 @@ body.app-shell-on .app-bottom-nav {
 .analytics-bar { width: 100%; height: 9px; overflow: hidden; border-radius: 999px; background: var(--not-visited-tint); }
 .analytics-bar span { display: block; height: 100%; border-radius: inherit; }
 
-.leaderboard-container, .profile-container { max-width: 1080px; }
+.leaderboard-container, .profile-container { max-width: 1200px; }
 .leaderboard-podium { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; align-items: end; }
 .podium-card { min-height: 150px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; padding: 18px 12px; text-align: center; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); box-shadow: var(--shadow-sm); }
 .podium-card span { font-size: 26px; }
@@ -5096,7 +5208,6 @@ body.app-shell-on .app-bottom-nav {
 .report-review-cta { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 14px 0; background: linear-gradient(135deg, var(--brand-tint), var(--surface)); border-color: var(--brand); }
 .report-review-cta h2 { margin: 3px 0; font-size: 18px; }
 .report-review-cta p { margin: 0; }
-.report-podium { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; align-items: end; }
 
 @media (max-width: 700px) {
   .dashboard-section-heading, .details-hero { align-items: flex-start; flex-direction: column; }
@@ -5126,7 +5237,6 @@ body.app-shell-on .app-bottom-nav {
   .review-question-card { min-height: 0; }
   .report-review-cta { align-items: stretch; flex-direction: column; }
   .report-review-cta .btn { width: 100%; }
-  .report-podium { grid-template-columns: 1fr; align-items: stretch; }
 }
 
 @media (max-width: 420px) {
@@ -5469,4 +5579,4 @@ body.app-shell-on .view.active {
   .landing-proof-copy { text-align: center; }
   .landing-proof-copy h2, .landing-proof-copy p { margin-left: auto; margin-right: auto; }
   .landing-product-preview { transform: none; }
-}
+} 
