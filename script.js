@@ -7,7 +7,7 @@ const SUPABASE_ANON_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJzeGJvcnRyb25yaHRkd2x2d2FvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkxNjY0NTcsImV4cCI6MjEwNDc0MjQ1N30.cVemoSdCmpxV22YMJQCFukAZstQnNUx4dEli9TXefZQ";
 
 const { createClient } = supabase;
-const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY); 
+const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 /* =========================================================================
    1. SMALL SHARED HELPERS
@@ -313,7 +313,11 @@ async function router() {
     return;
   }
 
-  if (parsed.path === "/login" || parsed.path === "/" || parsed.path === "/landing") {
+  if (
+    parsed.path === "/login" ||
+    parsed.path === "/" ||
+    parsed.path === "/landing"
+  ) {
     navigate("/dashboard");
     return;
   }
@@ -550,14 +554,24 @@ async function enterTestsView() {
    Upcoming/Past. Replaces the old plain "my attempts" list. ---- */
 let testsCatalogCache = [];
 let testsFilterState = { status: "all", query: "" };
-
 function fetchTestsCatalog() {
-  return sb.rpc("get_student_test_catalog").then(({ data, error }) => ({
+  return sb.rpc("get_student_dashboard_tests").then(({ data, error }) => ({
     data: (data || []).map((entry) => ({
       ...entry,
-      windowState: entry.lifecycle === "live" ? "ongoing" : entry.lifecycle === "locked" ? "upcoming" : "past",
+      windowState:
+        entry.lifecycle === "live"
+          ? "ongoing"
+          : entry.lifecycle === "locked"
+            ? "upcoming"
+            : "past",
+
       myAttempt: entry.attempt_id
-        ? { id: entry.attempt_id, status: entry.attempt_status, total_score: entry.attempt_score, submitted_at: entry.attempt_submitted_at }
+        ? {
+            id: entry.attempt_id,
+            status: entry.attempt_status,
+            total_score: entry.attempt_score,
+            submitted_at: entry.attempt_submitted_at,
+          }
         : null,
     })),
     error,
@@ -566,10 +580,18 @@ function fetchTestsCatalog() {
 
 function classifyTestWindow(test, nowMs = Date.now()) {
   if (test.lifecycle) {
-    return test.lifecycle === "live" ? "ongoing" : test.lifecycle === "locked" ? "upcoming" : "past";
+    return test.lifecycle === "live"
+      ? "ongoing"
+      : test.lifecycle === "locked"
+        ? "upcoming"
+        : "past";
   }
-  const from = test.available_from ? new Date(test.available_from).getTime() : null;
-  const until = test.available_until ? new Date(test.available_until).getTime() : null;
+  const from = test.available_from
+    ? new Date(test.available_from).getTime()
+    : null;
+  const until = test.available_until
+    ? new Date(test.available_until).getTime()
+    : null;
   if (from !== null && nowMs < from) return "upcoming";
   if (until !== null && nowMs > until) return "past";
   return "ongoing";
@@ -577,21 +599,24 @@ function classifyTestWindow(test, nowMs = Date.now()) {
 
 function mergeCatalogWithAttempts(catalog, attempts) {
   const latestByTest = new Map();
+
   (attempts || []).forEach((a) => {
     const existing = latestByTest.get(a.test_id);
-    if (!existing || new Date(a.started_at) > new Date(existing.started_at)) {
+
+    if (
+      !existing ||
+      new Date(a.started_at) > new Date(existing.started_at)
+    ) {
       latestByTest.set(a.test_id, a);
     }
   });
-  return (catalog || [])
-    .filter((t) => t.is_published)
-    .map((t) => ({
-      ...t,
-      myAttempt: latestByTest.get(t.id) || null,
-      windowState: classifyTestWindow(t),
-    }));
-}
 
+  return (catalog || []).map((t) => ({
+    ...t,
+    myAttempt: latestByTest.get(t.id) || null,
+    windowState: classifyTestWindow(t),
+  }));
+}
 function reminderKey(testId) {
   return `jh_reminder_${testId}`;
 }
@@ -641,12 +666,15 @@ function testCardMeta(entry) {
 
 function testCardHtml(entry) {
   const liveBadge =
-    entry.windowState === "ongoing" ? `<span class="badge badge-live">Live</span>` : "";
-  const lifecycleBadge = entry.windowState === "upcoming"
-    ? `<span class="status-tag locked">🔒 Locked</span>`
-    : entry.windowState === "past"
-      ? `<span class="status-tag closed">🔴 Closed</span>`
+    entry.windowState === "ongoing"
+      ? `<span class="badge badge-live">Live</span>`
       : "";
+  const lifecycleBadge =
+    entry.windowState === "upcoming"
+      ? `<span class="status-tag locked">🔒 Locked</span>`
+      : entry.windowState === "past"
+        ? `<span class="status-tag closed">🔴 Closed</span>`
+        : "";
   const attemptTag = entry.myAttempt
     ? `<span class="status-tag ${entry.myAttempt.status}">${entry.myAttempt.status.replace("_", " ")}</span>`
     : "";
@@ -683,14 +711,20 @@ function renderHomeTestsToolbar() {
     </div>`;
   toolbar.querySelector("input").addEventListener("input", (event) => {
     const query = event.target.value.trim().toLowerCase();
-    renderHomeTests(testsCatalogCache.filter((entry) =>
-      (!query || entry.title.toLowerCase().includes(query)) &&
-      (testsFilterState.status === "all" || entry.windowState === testsFilterState.status),
-    ));
+    renderHomeTests(
+      testsCatalogCache.filter(
+        (entry) =>
+          (!query || entry.title.toLowerCase().includes(query)) &&
+          (testsFilterState.status === "all" ||
+            entry.windowState === testsFilterState.status),
+      ),
+    );
   });
   toolbar.querySelectorAll("button[data-filter]").forEach((button) => {
     button.addEventListener("click", () => {
-      toolbar.querySelectorAll("button").forEach((item) => item.classList.remove("active"));
+      toolbar
+        .querySelectorAll("button")
+        .forEach((item) => item.classList.remove("active"));
       button.classList.add("active");
       testsFilterState.status = button.dataset.filter;
       renderHomeTests(testsCatalogCache);
@@ -701,8 +735,10 @@ function renderHomeTestsToolbar() {
 function renderHomeTests(entries) {
   const grid = document.getElementById("homeTestsGrid");
   if (!grid) return;
-  const filtered = entries.filter((entry) =>
-    testsFilterState.status === "all" || entry.windowState === testsFilterState.status,
+  const filtered = entries.filter(
+    (entry) =>
+      testsFilterState.status === "all" ||
+      entry.windowState === testsFilterState.status,
   );
   grid.innerHTML = filtered.length
     ? filtered.slice(0, 6).map(testCardHtml).join("")
@@ -722,26 +758,25 @@ function applyTestsFilter() {
 
 async function loadTestsCatalog() {
   const grid = document.getElementById("testsCardGrid");
+  if (!grid) return;
+
   grid.innerHTML = `<div class="empty-state">Loading…</div>`;
 
-  const [{ data: catalog, error: catErr }, { data: attempts, error: attErr }] =
-    await Promise.all([
-      fetchTestsCatalog(),
-      sb
-        .from("test_attempts")
-        .select("id, test_id, status, total_score, started_at, submitted_at")
-        .eq("user_id", myProfile.id),
-    ]);
+  const { data: catalog, error } = await fetchTestsCatalog();
 
-  if (catErr || attErr) {
-    grid.innerHTML = `<div class="error-box">${escapeHtml(friendlyError(catErr || attErr))}</div>`;
+  if (error) {
+    console.error("Student dashboard tests error:", error);
+    grid.innerHTML = `
+      <div class="error-box">
+        ${escapeHtml(friendlyError(error))}
+      </div>
+    `;
     return;
   }
 
-  testsCatalogCache = mergeCatalogWithAttempts(catalog, attempts);
+  testsCatalogCache = catalog || [];
   applyTestsFilter();
-}
-
+} 
 function setupTestsCatalogListeners() {
   const searchInput = document.getElementById("testsSearchInput");
   const tabs = document.getElementById("testsStatusTabs");
@@ -756,7 +791,9 @@ function setupTestsCatalogListeners() {
   tabs.addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-filter]");
     if (!btn) return;
-    tabs.querySelectorAll("button").forEach((b) => b.classList.remove("active"));
+    tabs
+      .querySelectorAll("button")
+      .forEach((b) => b.classList.remove("active"));
     btn.classList.add("active");
     testsFilterState.status = btn.dataset.filter;
     applyTestsFilter();
@@ -768,7 +805,9 @@ function setupTestsCatalogListeners() {
     const id = btn.dataset.testId;
     const nowSet = !isReminderSet(id);
     setReminder(id, nowSet);
-    toast(nowSet ? "We'll remind you when this test opens" : "Reminder removed");
+    toast(
+      nowSet ? "We'll remind you when this test opens" : "Reminder removed",
+    );
     const entry = testsCatalogCache.find((t) => String(t.id) === String(id));
     if (entry) btn.outerHTML = testCardCta(entry);
   });
@@ -778,8 +817,18 @@ function setupTestsCatalogListeners() {
    4b. HOME VIEW — greeting, live-test spotlight, quick stats, quick access
    ========================================================================= */
 const MONTHS_SHORT = [
-  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
 ];
 
 function firstNameOf(fullName) {
@@ -806,25 +855,42 @@ async function enterTestDetailsView() {
     return;
   }
   content.innerHTML = `<div class="empty-state">Loading syllabus…</div>`;
-  const { data, error } = await sb.rpc("get_student_test_details", { p_test_id: testId });
+  const { data, error } = await sb.rpc("get_student_test_details", {
+    p_test_id: testId,
+  });
   if (error || !data) {
     content.innerHTML = `<div class="error-box">${escapeHtml(friendlyError(error) || "Test details could not be loaded.")}</div>`;
     return;
   }
   const state = data.lifecycle;
-  const stateLabel = state === "live" ? "🟢 Live" : state === "closed" ? "🔴 Closed" : "🔒 Locked";
-  const subjectRows = (data.subjects || []).map((subject) => `
+  const stateLabel =
+    state === "live"
+      ? "🟢 Live"
+      : state === "closed"
+        ? "🔴 Closed"
+        : "🔒 Locked";
+  const subjectRows = (data.subjects || [])
+    .map(
+      (subject) => `
     <div class="syllabus-row">
       <div><strong>${subjectDot(subject.subject)}${escapeHtml(subject.subject)}</strong><div class="text-muted syllabus-chapters">${(subject.chapters || []).map(escapeHtml).join(" · ") || "Chapter details will be announced"}</div></div>
       <span>${subject.question_count} questions · ${subject.total_marks} marks</span>
-    </div>`).join("");
-  const marking = (data.marking_scheme || []).map((scheme) => `<span class="detail-chip">+${scheme.positive_marks} / −${scheme.negative_marks}</span>`).join("");
+    </div>`,
+    )
+    .join("");
+  const marking = (data.marking_scheme || [])
+    .map(
+      (scheme) =>
+        `<span class="detail-chip">+${scheme.positive_marks} / −${scheme.negative_marks}</span>`,
+    )
+    .join("");
   const attempt = data.attempt;
-  const action = attempt && attempt.status !== "in_progress"
-    ? `<a class="btn btn-primary" href="#/result?attempt=${encodeURIComponent(attempt.id)}">View report</a>`
-    : state === "live"
-      ? `<a class="btn btn-primary" href="#/exam?test=${encodeURIComponent(data.id)}">${attempt ? "Resume test" : "Start test"}</a>`
-      : `<button class="btn btn-primary" disabled>${state === "closed" ? "Test closed" : `Starts ${formatDateTime(data.available_from)}`}</button>`;
+  const action =
+    attempt && attempt.status !== "in_progress"
+      ? `<a class="btn btn-primary" href="#/result?attempt=${encodeURIComponent(attempt.id)}">View report</a>`
+      : state === "live"
+        ? `<a class="btn btn-primary" href="#/exam?test=${encodeURIComponent(data.id)}">${attempt ? "Resume test" : "Start test"}</a>`
+        : `<button class="btn btn-primary" disabled>${state === "closed" ? "Test closed" : `Starts ${formatDateTime(data.available_from)}`}</button>`;
   content.innerHTML = `
     <div class="details-hero">
       <div><span class="eyebrow-label">${escapeHtml(data.category || "Test series")}</span><h1>${escapeHtml(data.title)}</h1><p>${escapeHtml(data.description || "Review the syllabus and marking scheme before you begin.")}</p></div>
@@ -871,7 +937,9 @@ function renderHomeSpotlight(merged) {
 
   const t = candidates[0];
   const label =
-    t.myAttempt && t.myAttempt.status === "in_progress" ? "Resume Test" : "Take Test";
+    t.myAttempt && t.myAttempt.status === "in_progress"
+      ? "Resume Test"
+      : "Take Test";
   el.innerHTML = `
     <div class="home-spotlight-card">
       <div class="home-spotlight-top">
@@ -906,9 +974,10 @@ async function renderHomeStats(merged, attempts) {
   if (submittedAttempts.length) {
     const reports = await Promise.all(
       submittedAttempts.map((a) =>
-        sb
-          .rpc("get_full_report", { p_attempt_id: a.id })
-          .then((r) => r.data, () => null),
+        sb.rpc("get_full_report", { p_attempt_id: a.id }).then(
+          (r) => r.data,
+          () => null,
+        ),
       ),
     );
     let scoreSum = 0;
@@ -921,7 +990,8 @@ async function renderHomeStats(merged, attempts) {
         maxSum += max;
       }
     });
-    if (maxSum > 0) avgScoreLabel = `${((scoreSum / maxSum) * 100).toFixed(1)}%`;
+    if (maxSum > 0)
+      avgScoreLabel = `${((scoreSum / maxSum) * 100).toFixed(1)}%`;
   }
 
   el.innerHTML = `
@@ -936,10 +1006,12 @@ async function enterHomeView() {
   const name = myProfile?.full_name || "Student";
 
   document.getElementById("homeGreetingWord").textContent = greetingWord();
-  document.getElementById("homeGreetingName").textContent = firstNameOf(name) || "Student";
+  document.getElementById("homeGreetingName").textContent =
+    firstNameOf(name) || "Student";
   document.getElementById("homeDateLine").textContent = formatHomeDate();
   const avatarEl = document.getElementById("homeAvatar");
-  if (avatarEl) avatarEl.textContent = name.trim().charAt(0).toUpperCase() || "S";
+  if (avatarEl)
+    avatarEl.textContent = name.trim().charAt(0).toUpperCase() || "S";
 
   const spotlightEl = document.getElementById("homeSpotlight");
   const statsEl = document.getElementById("homeStats");
@@ -1174,7 +1246,8 @@ function setupAdminTestListeners() {
       const payload = {
         title: document.getElementById("titleInput").value.trim(),
         description: document.getElementById("descInput").value.trim() || null,
-        instructions: document.getElementById("instructionsInput").value.trim() || null,
+        instructions:
+          document.getElementById("instructionsInput").value.trim() || null,
         category: document.getElementById("categoryInput").value,
         duration_minutes: parseInt(
           document.getElementById("durationInput").value,
@@ -1454,10 +1527,15 @@ function showPostCreateSections() {
 function renderShareCard() {
   const tag = document.getElementById("publishTag");
   const now = Date.now();
-  const state = !currentTest.is_published || now < new Date(currentTest.available_from).getTime()
-    ? "locked"
-    : now >= new Date(currentTest.available_until).getTime() ? "closed" : "live";
-  tag.textContent = state === "live" ? "Live" : state === "closed" ? "Closed" : "Locked";
+  const state =
+    !currentTest.is_published ||
+    now < new Date(currentTest.available_from).getTime()
+      ? "locked"
+      : now >= new Date(currentTest.available_until).getTime()
+        ? "closed"
+        : "live";
+  tag.textContent =
+    state === "live" ? "Live" : state === "closed" ? "Closed" : "Locked";
   tag.className = "status-tag " + state;
   document.getElementById("scheduleSummary").textContent =
     `Students see this test automatically. Publishes ${formatDateTime(currentTest.available_from)} · closes ${formatDateTime(currentTest.available_until)}.`;
@@ -1645,7 +1723,10 @@ async function loadStudentResults() {
 }
 
 async function loadLeaderboard() {
-  const { data, error } = await sb.rpc("get_test_leaderboard", {
+  // admin_get_test_leaderboard() is never gated by result_release_at, so
+  // admins can review and disqualify suspicious attempts before results are
+  // declared — unlike the student-facing get_test_leaderboard().
+  const { data, error } = await sb.rpc("admin_get_test_leaderboard", {
     p_test_id: currentTest.id,
   });
 
@@ -1667,8 +1748,6 @@ async function loadLeaderboard() {
     return;
   }
 
-  console.log("RAW LEADERBOARD DATA:", data);
-
   if (!data || data.length === 0) {
     body.innerHTML = `
       <tr>
@@ -1683,32 +1762,27 @@ async function loadLeaderboard() {
 
   body.innerHTML = data
     .map((r) => {
-      const rank = r.rnk ?? r.rank ?? r.ranking ?? "-";
+      const student = r.full_name || "Student";
+      const attemptId = r.attempt_id || "";
 
-      const student = r.full_name ?? r.student_name ?? r.name ?? "Student";
-
-      const score = r.total_score ?? r.score ?? r.marks ?? 0;
-
-      const percentile = r.percentile ?? r.percentile_score ?? 0;
-
-      const attemptId = r.attempt_id ?? r.id ?? "";
+      if (r.disqualified) {
+        return `
+        <tr class="disqualified-row">
+          <td>—</td>
+          <td>${escapeHtml(student)} <span class="status-tag" style="background:var(--danger-tint);color:var(--danger);">DQ</span></td>
+          <td>${r.total_score}</td>
+          <td>—</td>
+          <td class="text-muted">Disqualified</td>
+        </tr>
+      `;
+      }
 
       return `
         <tr>
-          <td>${rank}</td>
-
-          <td>
-            ${escapeHtml(student)}
-          </td>
-
-          <td>
-            ${score}
-          </td>
-
-          <td>
-            ${Number(percentile).toFixed(3)}%
-          </td>
-
+          <td>#${r.rnk}</td>
+          <td>${escapeHtml(student)}</td>
+          <td>${r.total_score}</td>
+          <td>${Number(r.percentile ?? 0).toFixed(3)}%</td>
           <td>
             <button
               type="button"
@@ -2132,7 +2206,9 @@ async function enterExamView() {
     await Promise.all([
       sb
         .from("tests")
-        .select("id, title, category, duration_minutes, available_from, available_until, is_published")
+        .select(
+          "id, title, category, duration_minutes, available_from, available_until, is_published",
+        )
         .eq("id", selectedTestId)
         .maybeSingle(),
       sb
@@ -2145,7 +2221,13 @@ async function enterExamView() {
         .maybeSingle(),
     ]);
 
-  if (testMetaError || !testMeta || !testMeta.is_published || Date.now() < new Date(testMeta.available_from).getTime() || Date.now() >= new Date(testMeta.available_until).getTime()) {
+  if (
+    testMetaError ||
+    !testMeta ||
+    !testMeta.is_published ||
+    Date.now() < new Date(testMeta.available_from).getTime() ||
+    Date.now() >= new Date(testMeta.available_until).getTime()
+  ) {
     showTerminal(
       "Test is not live",
       "This test is locked or closed. Return to your dashboard to see the current status.",
@@ -2574,10 +2656,14 @@ async function onBegin() {
   const missingProfileFields = [];
   if (!myProfile?.full_name?.trim()) missingProfileFields.push("Full name");
   if (!myProfile?.email?.trim()) missingProfileFields.push("Email");
-  if (!myProfile?.class_grade?.trim()) missingProfileFields.push("Class / grade");
+  if (!myProfile?.class_grade?.trim())
+    missingProfileFields.push("Class / grade");
   if (missingProfileFields.length) {
     closeModal("beginModal");
-    toast(`Complete your profile first: ${missingProfileFields.join(", ")}.`, "error");
+    toast(
+      `Complete your profile first: ${missingProfileFields.join(", ")}.`,
+      "error",
+    );
     navigate("/profile?complete=1");
     return;
   }
@@ -2849,13 +2935,14 @@ function renderReviewQuestion(r) {
             : isPicked
               ? "review-wrong"
               : "";
-          const tag = isCorrect && isPicked
-            ? `<span class="status-tag published" style="margin-left:auto;">Your answer · Correct</span>`
-            : isCorrect
-              ? `<span class="status-tag published" style="margin-left:auto;">Correct answer</span>`
-              : isPicked
-                ? `<span class="status-tag" style="margin-left:auto;background:var(--danger-tint);color:var(--danger);">Your answer · Wrong</span>`
-                : "";
+          const tag =
+            isCorrect && isPicked
+              ? `<span class="status-tag published" style="margin-left:auto;">Your answer · Correct</span>`
+              : isCorrect
+                ? `<span class="status-tag published" style="margin-left:auto;">Correct answer</span>`
+                : isPicked
+                  ? `<span class="status-tag" style="margin-left:auto;background:var(--danger-tint);color:var(--danger);">Your answer · Wrong</span>`
+                  : "";
           return `
         <div class="option-item ${cls}">
           <span class="option-letter">${o.id}</span>
@@ -2887,9 +2974,20 @@ function renderReviewQuestion(r) {
 }
 
 function renderReportAnalysis(report, subjectRows, review) {
-  const totalMax = subjectRows.reduce((sum, row) => sum + Number(row.total || 0), 0);
-  const scorePct = totalMax > 0 ? Math.max(0, Math.min(100, (Number(report.total_score || 0) / totalMax) * 100)) : 0;
-  const attempted = review.filter((row) => row.is_correct !== null && row.is_correct !== undefined).length;
+  const totalMax = subjectRows.reduce(
+    (sum, row) => sum + Number(row.total || 0),
+    0,
+  );
+  const scorePct =
+    totalMax > 0
+      ? Math.max(
+          0,
+          Math.min(100, (Number(report.total_score || 0) / totalMax) * 100),
+        )
+      : 0;
+  const attempted = review.filter(
+    (row) => row.is_correct !== null && row.is_correct !== undefined,
+  ).length;
   const correct = review.filter((row) => row.is_correct === true).length;
   const accuracy = attempted ? (correct / attempted) * 100 : 0;
   return `<section class="report-analysis-grid"><div class="card report-chart-card"><div class="section-title"><h2>Test performance</h2><span class="text-muted">Score and accuracy</span></div><div class="report-radials">${renderRadialProgress(scorePct, { size: 132, stroke: 10, color: "var(--brand)", subLabel: "Score" })}${renderRadialProgress(accuracy, { size: 132, stroke: 10, color: "var(--success)", subLabel: "Accuracy" })}</div></div><div class="card report-chart-card"><div class="section-title"><h2>Subject breakdown</h2><span class="text-muted">Marks earned</span></div><div class="subject-performance-list">${subjectRows.map((row) => `<div class="subject-performance-row"><div class="subject-performance-label"><span>${subjectDot(row.subject)}${escapeHtml(row.subject)}</span><strong>${row.obtained} / ${row.total}</strong></div>${analyticsBar(Number(row.obtained), Number(row.total), subjectColor(row.subject))}</div>`).join("")}</div></div></section>`;
@@ -2910,11 +3008,18 @@ function reviewState(question) {
 function renderReviewPalette() {
   const grid = document.getElementById("reviewPaletteGrid");
   const list = reviewBySubject[reviewSubject] || [];
-  grid.innerHTML = list.map((question, index) => `<button type="button" class="palette-btn review-palette-btn ${reviewState(question)} ${index === reviewIndex ? "current" : ""}" data-review-index="${index}">${index + 1}</button>`).join("");
-  grid.querySelectorAll("button").forEach((button) => button.addEventListener("click", () => {
-    reviewIndex = Number(button.dataset.reviewIndex);
-    renderReviewQuestionCard();
-  }));
+  grid.innerHTML = list
+    .map(
+      (question, index) =>
+        `<button type="button" class="palette-btn review-palette-btn ${reviewState(question)} ${index === reviewIndex ? "current" : ""}" data-review-index="${index}">${index + 1}</button>`,
+    )
+    .join("");
+  grid.querySelectorAll("button").forEach((button) =>
+    button.addEventListener("click", () => {
+      reviewIndex = Number(button.dataset.reviewIndex);
+      renderReviewQuestionCard();
+    }),
+  );
 }
 
 function renderReviewQuestionCard() {
@@ -2924,19 +3029,39 @@ function renderReviewQuestionCard() {
     card.innerHTML = `<div class="empty-state">No question selected.</div>`;
     return;
   }
-  const options = (question.options || []).map((option) => {
-    const correct = option.id === question.correct_option;
-    const selected = option.id === question.selected_option;
-    const stateClass = correct ? "review-correct" : selected ? "review-wrong" : "";
-    const label = correct && selected ? "Your answer · Correct" : correct ? "Correct answer" : selected ? "Your answer · Wrong" : "";
-    return `<div class="option-item ${stateClass}"><span class="option-letter">${escapeHtml(option.id)}</span><span class="option-text">${escapeHtml(option.text)}</span>${label ? `<span class="review-option-label">${label}</span>` : ""}</div>`;
-  }).join("");
-  const integerAnswer = question.integer_answer == null ? "—" : question.integer_answer;
-  const correctInteger = question.correct_integer_value == null ? "—" : question.correct_integer_value;
+  const options = (question.options || [])
+    .map((option) => {
+      const correct = option.id === question.correct_option;
+      const selected = option.id === question.selected_option;
+      const stateClass = correct
+        ? "review-correct"
+        : selected
+          ? "review-wrong"
+          : "";
+      const label =
+        correct && selected
+          ? "Your answer · Correct"
+          : correct
+            ? "Correct answer"
+            : selected
+              ? "Your answer · Wrong"
+              : "";
+      return `<div class="option-item ${stateClass}"><span class="option-letter">${escapeHtml(option.id)}</span><span class="option-text">${escapeHtml(option.text)}</span>${label ? `<span class="review-option-label">${label}</span>` : ""}</div>`;
+    })
+    .join("");
+  const integerAnswer =
+    question.integer_answer == null ? "—" : question.integer_answer;
+  const correctInteger =
+    question.correct_integer_value == null
+      ? "—"
+      : question.correct_integer_value;
   card.innerHTML = `<div class="review-question-heading"><div class="question-number-badge">${subjectDot(question.subject)}${escapeHtml(question.subject)} · Question ${reviewQuestions.indexOf(question) + 1}</div><span class="review-result-pill ${reviewState(question) === "correct" ? "review-result-correct" : reviewState(question) === "wrong" ? "review-result-wrong" : "review-result-skipped"}">${reviewState(question)} · ${question.marks_obtained || 0} marks</span></div>${questionImageHtml(question.image_url)}<div class="question-text">${escapeHtml(question.question_text)}</div>${question.question_type === "mcq" ? `<div class="option-list">${options}</div>` : `<div class="review-integer-answer"><span class="${question.is_correct ? "answer-good" : "answer-bad"}">Your answer: ${escapeHtml(String(integerAnswer))}</span><span class="answer-good">Correct answer: ${escapeHtml(String(correctInteger))}</span></div>`}${question.explanation ? `<div class="explanation-box mt-8">${escapeHtml(question.explanation)}</div>` : ""}`;
-  document.getElementById("reviewProgressLabel").textContent = `${reviewQuestions.indexOf(question) + 1} of ${reviewQuestions.length}`;
+  document.getElementById("reviewProgressLabel").textContent =
+    `${reviewQuestions.indexOf(question) + 1} of ${reviewQuestions.length}`;
   document.getElementById("reviewPreviousBtn").disabled = reviewIndex === 0;
-  document.getElementById("reviewNextBtn").disabled = reviewIndex === (reviewBySubject[reviewSubject] || []).length - 1 && reviewSubjects.indexOf(reviewSubject) === reviewSubjects.length - 1;
+  document.getElementById("reviewNextBtn").disabled =
+    reviewIndex === (reviewBySubject[reviewSubject] || []).length - 1 &&
+    reviewSubjects.indexOf(reviewSubject) === reviewSubjects.length - 1;
   renderReviewPalette();
   renderMath(card);
 }
@@ -2949,7 +3074,9 @@ async function enterReviewView() {
     return;
   }
   card.innerHTML = `<div class="empty-state">Loading answer review…</div>`;
-  const { data: report, error } = await sb.rpc("get_full_report", { p_attempt_id: attemptId });
+  const { data: report, error } = await sb.rpc("get_full_report", {
+    p_attempt_id: attemptId,
+  });
   if (error || !report) {
     card.innerHTML = `<div class="error-box">${escapeHtml(friendlyError(error))}</div>`;
     return;
@@ -2967,32 +3094,60 @@ async function enterReviewView() {
   reviewSubject = reviewSubjects[0] || null;
   reviewIndex = 0;
   document.getElementById("reviewTitle").textContent = report.test_title;
-  document.getElementById("reviewCandidate").textContent = `${report.full_name || "Student"} · Read-only answer review`;
-  document.getElementById("reviewBackBtn").href = `#/result?attempt=${encodeURIComponent(attemptId)}`;
+  document.getElementById("reviewCandidate").textContent =
+    `${report.full_name || "Student"} · Read-only answer review`;
+  document.getElementById("reviewBackBtn").href =
+    `#/result?attempt=${encodeURIComponent(attemptId)}`;
   const tabs = document.getElementById("reviewSubjectTabs");
-  tabs.innerHTML = reviewSubjects.map((subject) => `<button type="button" class="${subject === reviewSubject ? "active" : ""}" data-review-subject="${escapeHtml(subject)}">${subjectDot(subject)}${escapeHtml(subject)}</button>`).join("");
-  tabs.querySelectorAll("button").forEach((button) => button.addEventListener("click", () => {
-    reviewSubject = button.dataset.reviewSubject;
-    reviewIndex = 0;
-    tabs.querySelectorAll("button").forEach((item) => item.classList.toggle("active", item === button));
-    renderReviewQuestionCard();
-  }));
+  tabs.innerHTML = reviewSubjects
+    .map(
+      (subject) =>
+        `<button type="button" class="${subject === reviewSubject ? "active" : ""}" data-review-subject="${escapeHtml(subject)}">${subjectDot(subject)}${escapeHtml(subject)}</button>`,
+    )
+    .join("");
+  tabs.querySelectorAll("button").forEach((button) =>
+    button.addEventListener("click", () => {
+      reviewSubject = button.dataset.reviewSubject;
+      reviewIndex = 0;
+      tabs
+        .querySelectorAll("button")
+        .forEach((item) => item.classList.toggle("active", item === button));
+      renderReviewQuestionCard();
+    }),
+  );
   document.getElementById("reviewPreviousBtn").onclick = () => {
     if (reviewIndex > 0) reviewIndex -= 1;
     else if (reviewSubjects.indexOf(reviewSubject) > 0) {
       reviewSubject = reviewSubjects[reviewSubjects.indexOf(reviewSubject) - 1];
       reviewIndex = (reviewBySubject[reviewSubject] || []).length - 1;
-      tabs.querySelectorAll("button").forEach((item) => item.classList.toggle("active", item.dataset.reviewSubject === reviewSubject));
+      tabs
+        .querySelectorAll("button")
+        .forEach((item) =>
+          item.classList.toggle(
+            "active",
+            item.dataset.reviewSubject === reviewSubject,
+          ),
+        );
     }
     renderReviewQuestionCard();
   };
   document.getElementById("reviewNextBtn").onclick = () => {
     const currentList = reviewBySubject[reviewSubject] || [];
     if (reviewIndex < currentList.length - 1) reviewIndex += 1;
-    else if (reviewSubjects.indexOf(reviewSubject) < reviewSubjects.length - 1) {
+    else if (
+      reviewSubjects.indexOf(reviewSubject) <
+      reviewSubjects.length - 1
+    ) {
       reviewSubject = reviewSubjects[reviewSubjects.indexOf(reviewSubject) + 1];
       reviewIndex = 0;
-      tabs.querySelectorAll("button").forEach((item) => item.classList.toggle("active", item.dataset.reviewSubject === reviewSubject));
+      tabs
+        .querySelectorAll("button")
+        .forEach((item) =>
+          item.classList.toggle(
+            "active",
+            item.dataset.reviewSubject === reviewSubject,
+          ),
+        );
     }
     renderReviewQuestionCard();
   };
@@ -3117,7 +3272,6 @@ async function enterResultView() {
           : board.length === 0
             ? `<div class="empty-state">No submissions yet.</div>`
             : `
-          <div class="report-podium">${board.slice(0, 3).map((row, index) => `<div class="podium-card podium-${index + 1}"><span>${medalFor(index + 1)}</span><strong>${escapeHtml(row.full_name || "Student")}</strong><b>#${row.rnk}</b><small>${row.total_score} marks · ${row.percentile}%</small></div>`).join("")}</div>
       <div class="table-scroll">
         <table class="report-table">
           <thead><tr><th>Rank</th><th>Student</th><th>Score</th><th>Percentile</th></tr></thead>
@@ -3126,7 +3280,7 @@ async function enterResultView() {
               .map(
                 (r) => `
               <tr class="${rankRowClass(r.rnk)} ${r.user_id === report.viewer_user_id ? "me" : ""}">
-                <td>${medalFor(r.rnk)}${r.rnk}</td><td>${escapeHtml(r.full_name || "Student")}${r.user_id === report.viewer_user_id ? " (you)" : ""}</td>
+                <td>${medalFor(r.rnk)}#${r.rnk}</td><td>${escapeHtml(r.full_name || "Student")}${r.user_id === report.viewer_user_id ? ' <span class="you-badge">YOU</span>' : ""}</td>
                 <td>${r.total_score}</td><td>${r.percentile}%</td>
               </tr>
             `,
@@ -3150,6 +3304,7 @@ async function enterResultView() {
     </div>
   `;
   renderMath(content);
+  animateRadialProgress(content);
 }
 
 /* =========================================================================
@@ -3158,8 +3313,16 @@ async function enterResultView() {
    next known label, so pasted paragraphs and displayed LaTeX stay intact.
    ========================================================================= */
 const BULK_IMPORT_FIELDS = [
-  "QUESTION", "OPTION_A", "OPTION_B", "OPTION_C", "OPTION_D",
-  "ANSWER", "EXPLANATION", "TYPE", "SUBJECT", "CHAPTER",
+  "QUESTION",
+  "OPTION_A",
+  "OPTION_B",
+  "OPTION_C",
+  "OPTION_D",
+  "ANSWER",
+  "EXPLANATION",
+  "TYPE",
+  "SUBJECT",
+  "CHAPTER",
 ];
 let bulkQuestions = [];
 
@@ -3167,16 +3330,26 @@ function parseBulkQuestions(source) {
   const text = String(source || "").replace(/\r\n?/g, "\n");
   const headers = [...text.matchAll(/^\s*\[QUESTION(?:\s+(\d+))?\]\s*$/gim)];
   if (!headers.length) {
-    throw new Error("No [QUESTION 1] sections were found. Check the required format.");
+    throw new Error(
+      "No [QUESTION 1] sections were found. Check the required format.",
+    );
   }
 
   return headers.map((header, index) => {
     const section = text
-      .slice(header.index + header[0].length, headers[index + 1]?.index ?? text.length)
+      .slice(
+        header.index + header[0].length,
+        headers[index + 1]?.index ?? text.length,
+      )
       .trim();
-    const matches = [...section.matchAll(new RegExp(
-      `^\\s*(${BULK_IMPORT_FIELDS.join("|")})\\s*:\\s*(.*)$`, "gim",
-    ))];
+    const matches = [
+      ...section.matchAll(
+        new RegExp(
+          `^\\s*(${BULK_IMPORT_FIELDS.join("|")})\\s*:\\s*(.*)$`,
+          "gim",
+        ),
+      ),
+    ];
     const values = {};
     matches.forEach((match, fieldIndex) => {
       const end = matches[fieldIndex + 1]?.index ?? section.length;
@@ -3203,7 +3376,10 @@ function parseBulkQuestions(source) {
 
 function validateBulkQuestion(question) {
   const errors = [];
-  const type = String(question.type).trim().toLowerCase().replace(/[\s/_-]+/g, "");
+  const type = String(question.type)
+    .trim()
+    .toLowerCase()
+    .replace(/[\s/_-]+/g, "");
   if (!question.question.trim()) errors.push("Question text is missing.");
   if (!question.subject.trim()) errors.push("Subject is missing.");
   if (!["mcq", "integer", "numerical"].includes(type)) {
@@ -3212,11 +3388,16 @@ function validateBulkQuestion(question) {
   if (type === "mcq") {
     const answer = question.answer.trim().toUpperCase();
     ["A", "B", "C", "D"].forEach((letter) => {
-      if (!question[`option${letter}`].trim()) errors.push(`OPTION_${letter} is missing.`);
+      if (!question[`option${letter}`].trim())
+        errors.push(`OPTION_${letter} is missing.`);
     });
-    if (!["A", "B", "C", "D"].includes(answer)) errors.push("ANSWER must be A, B, C, or D for MCQ.");
+    if (!["A", "B", "C", "D"].includes(answer))
+      errors.push("ANSWER must be A, B, C, or D for MCQ.");
   } else if (type === "integer" || type === "numerical") {
-    if (!question.answer.trim() || !Number.isFinite(Number(question.answer.trim()))) {
+    if (
+      !question.answer.trim() ||
+      !Number.isFinite(Number(question.answer.trim()))
+    ) {
       errors.push("ANSWER must be a number for Integer/Numerical questions.");
     }
   }
@@ -3240,17 +3421,33 @@ function bulkQuestionField(question, field, label, multiline = true) {
 
 function renderBulkQuestionPreview(question, index) {
   validateBulkQuestion(question);
-  const type = question.type.trim().toLowerCase().replace(/[\s/_-]+/g, "");
-  const renderedOptions = type === "mcq"
-    ? ["A", "B", "C", "D"].map((letter) => `<div class="bulk-render-option"><strong>${letter}</strong><span>${escapeHtml(question[`option${letter}`])}</span></div>`).join("")
-    : `<div class="bulk-render-answer">Correct numerical answer: <strong>${escapeHtml(question.answer)}</strong></div>`;
+  const type = question.type
+    .trim()
+    .toLowerCase()
+    .replace(/[\s/_-]+/g, "");
+  const renderedOptions =
+    type === "mcq"
+      ? ["A", "B", "C", "D"]
+          .map(
+            (letter) =>
+              `<div class="bulk-render-option"><strong>${letter}</strong><span>${escapeHtml(question[`option${letter}`])}</span></div>`,
+          )
+          .join("")
+      : `<div class="bulk-render-answer">Correct numerical answer: <strong>${escapeHtml(question.answer)}</strong></div>`;
   return `
     <article class="bulk-question-card ${question.errors.length ? "has-errors" : "is-valid"}" data-bulk-card="${index}">
       <div class="bulk-question-heading">
         <div><span class="badge ${question.errors.length ? "badge-live" : "badge-brand"}">${question.errors.length ? `${question.errors.length} error${question.errors.length === 1 ? "" : "s"}` : "Valid"}</span><strong>Question ${escapeHtml(question.sourceNumber || String(index + 1))}</strong></div>
         <button type="button" class="btn btn-sm btn-danger js-remove-bulk-question" data-bulk-remove="${index}">Remove</button>
       </div>
-      ${question.errors.length ? `<div class="bulk-question-error-list">${question.errors.map(escapeHtml).map((error) => `<div>${error}</div>`).join("")}</div>` : ""}
+      ${
+        question.errors.length
+          ? `<div class="bulk-question-error-list">${question.errors
+              .map(escapeHtml)
+              .map((error) => `<div>${error}</div>`)
+              .join("")}</div>`
+          : ""
+      }
       <div class="bulk-question-fields">
         ${bulkQuestionField(question, "question", "Question")}
         ${bulkQuestionField(question, "optionA", "Option A")}
@@ -3271,14 +3468,24 @@ function renderBulkImportPreview() {
   const preview = document.getElementById("bulkImportPreview");
   const active = bulkQuestions.filter((question) => !question.removed);
   active.forEach(validateBulkQuestion);
-  const validCount = active.filter((question) => !question.errors.length).length;
-  document.getElementById("bulkImportSummary").textContent = `${validCount} valid / ${active.length} questions`;
-  document.getElementById("importAllValidQuestionsBtn").disabled = validCount === 0;
+  const validCount = active.filter(
+    (question) => !question.errors.length,
+  ).length;
+  document.getElementById("bulkImportSummary").textContent =
+    `${validCount} valid / ${active.length} questions`;
+  document.getElementById("importAllValidQuestionsBtn").disabled =
+    validCount === 0;
   preview.innerHTML = active.length
-    ? active.map((question) => renderBulkQuestionPreview(question, bulkQuestions.indexOf(question))).join("")
+    ? active
+        .map((question) =>
+          renderBulkQuestionPreview(question, bulkQuestions.indexOf(question)),
+        )
+        .join("")
     : `<div class="empty-state">All parsed questions were removed.</div>`;
   const errors = document.getElementById("bulkImportErrors");
-  errors.style.display = active.some((question) => question.errors.length) ? "block" : "none";
+  errors.style.display = active.some((question) => question.errors.length)
+    ? "block"
+    : "none";
   errors.textContent = active.some((question) => question.errors.length)
     ? "Fix the highlighted questions before importing. Invalid questions will be skipped."
     : "";
@@ -3305,32 +3512,63 @@ function updateBulkQuestionFromField(event) {
 
 async function loadBulkImportTests() {
   const select = document.getElementById("bulkTestSelect");
-  const { data, error } = await sb.from("tests").select("id,title,test_code,is_published").order("created_at", { ascending: false });
+  const { data, error } = await sb
+    .from("tests")
+    .select("id,title,test_code,is_published")
+    .order("created_at", { ascending: false });
   if (error) {
     select.innerHTML = `<option value="">${escapeHtml(friendlyError(error))}</option>`;
     return;
   }
-  select.innerHTML = `<option value="">Select an existing test…</option>` + (data || []).map((test) =>
-    `<option value="${test.id}">${escapeHtml(test.title)} (${escapeHtml(test.test_code)})${test.is_published ? "" : " — draft"}</option>`,
-  ).join("");
+  select.innerHTML =
+    `<option value="">Select an existing test…</option>` +
+    (data || [])
+      .map(
+        (test) =>
+          `<option value="${test.id}">${escapeHtml(test.title)} (${escapeHtml(test.test_code)})${test.is_published ? "" : " — draft"}</option>`,
+      )
+      .join("");
 }
 
 async function importBulkQuestions() {
   const testId = document.getElementById("bulkTestSelect").value;
   const result = document.getElementById("bulkImportResult");
   const valid = bulkQuestions.filter(
-    (question) => !question.removed && validateBulkQuestion(question).length === 0,
+    (question) =>
+      !question.removed && validateBulkQuestion(question).length === 0,
   );
-  if (!testId) { toast("Select a test first.", "error"); return; }
-  if (!valid.length) { toast("There are no valid questions to import.", "error"); return; }
+  if (!testId) {
+    toast("Select a test first.", "error");
+    return;
+  }
+  if (!valid.length) {
+    toast("There are no valid questions to import.", "error");
+    return;
+  }
   const button = document.getElementById("importAllValidQuestionsBtn");
   button.disabled = true;
   result.textContent = "Importing…";
-  const { data: existing, error: existingError } = await sb.from("questions").select("question_order").eq("test_id", testId).order("question_order", { ascending: false }).limit(1);
-  if (existingError) { button.disabled = false; result.textContent = ""; toast(friendlyError(existingError), "error"); return; }
-  const nextOrder = existing?.[0]?.question_order == null ? 0 : Number(existing[0].question_order) + 1;
+  const { data: existing, error: existingError } = await sb
+    .from("questions")
+    .select("question_order")
+    .eq("test_id", testId)
+    .order("question_order", { ascending: false })
+    .limit(1);
+  if (existingError) {
+    button.disabled = false;
+    result.textContent = "";
+    toast(friendlyError(existingError), "error");
+    return;
+  }
+  const nextOrder =
+    existing?.[0]?.question_order == null
+      ? 0
+      : Number(existing[0].question_order) + 1;
   const rows = valid.map((question, index) => {
-    const type = question.type.trim().toLowerCase().replace(/[\s/_-]+/g, "");
+    const type = question.type
+      .trim()
+      .toLowerCase()
+      .replace(/[\s/_-]+/g, "");
     const isMcq = type === "mcq";
     const row = {
       test_id: testId,
@@ -3338,7 +3576,12 @@ async function importBulkQuestions() {
       subject: question.subject.trim(),
       question_type: isMcq ? "mcq" : "integer",
       question_text: question.question.trim(),
-      options: isMcq ? ["A", "B", "C", "D"].map((id) => ({ id, text: question[`option${id}`].trim() })) : null,
+      options: isMcq
+        ? ["A", "B", "C", "D"].map((id) => ({
+            id,
+            text: question[`option${id}`].trim(),
+          }))
+        : null,
       correct_option: isMcq ? question.answer.trim().toUpperCase() : null,
       correct_integer_value: isMcq ? null : Number(question.answer.trim()),
       explanation: question.explanation.trim() || null,
@@ -3350,7 +3593,9 @@ async function importBulkQuestions() {
   });
   let response = await sb.from("questions").insert(rows);
   if (response.error && /chapter|column/i.test(response.error.message || "")) {
-    response = await sb.from("questions").insert(rows.map(({ chapter, ...row }) => row));
+    response = await sb
+      .from("questions")
+      .insert(rows.map(({ chapter, ...row }) => row));
   }
   button.disabled = false;
   if (response.error) {
@@ -3367,35 +3612,52 @@ async function importBulkQuestions() {
 async function enterBulkImportView() {
   myProfile = myProfile || (await getMyProfile());
   const allowed = myProfile?.role === "admin";
-  document.getElementById("bulkImportNotAdmin").style.display = allowed ? "none" : "block";
-  document.getElementById("bulkImportContent").style.display = allowed ? "block" : "none";
+  document.getElementById("bulkImportNotAdmin").style.display = allowed
+    ? "none"
+    : "block";
+  document.getElementById("bulkImportContent").style.display = allowed
+    ? "block"
+    : "none";
   if (allowed) await loadBulkImportTests();
 }
 
 function setupBulkImportListeners() {
-  document.getElementById("parseBulkQuestionsBtn").addEventListener("click", () => {
-    try {
-      bulkQuestions = parseBulkQuestions(document.getElementById("bulkImportText").value);
-      document.getElementById("bulkImportPreviewCard").style.display = "block";
-      document.getElementById("bulkImportParseStatus").textContent = `${bulkQuestions.length} question${bulkQuestions.length === 1 ? "" : "s"} detected.`;
-      renderBulkImportPreview();
-    } catch (error) {
+  document
+    .getElementById("parseBulkQuestionsBtn")
+    .addEventListener("click", () => {
+      try {
+        bulkQuestions = parseBulkQuestions(
+          document.getElementById("bulkImportText").value,
+        );
+        document.getElementById("bulkImportPreviewCard").style.display =
+          "block";
+        document.getElementById("bulkImportParseStatus").textContent =
+          `${bulkQuestions.length} question${bulkQuestions.length === 1 ? "" : "s"} detected.`;
+        renderBulkImportPreview();
+      } catch (error) {
+        document.getElementById("bulkImportPreviewCard").style.display = "none";
+        document.getElementById("bulkImportParseStatus").textContent = "";
+        toast(error.message, "error");
+      }
+    });
+  document
+    .getElementById("clearBulkQuestionsBtn")
+    .addEventListener("click", () => {
+      bulkQuestions = [];
+      document.getElementById("bulkImportText").value = "";
       document.getElementById("bulkImportPreviewCard").style.display = "none";
       document.getElementById("bulkImportParseStatus").textContent = "";
-      toast(error.message, "error");
-    }
-  });
-  document.getElementById("clearBulkQuestionsBtn").addEventListener("click", () => {
-    bulkQuestions = [];
-    document.getElementById("bulkImportText").value = "";
-    document.getElementById("bulkImportPreviewCard").style.display = "none";
-    document.getElementById("bulkImportParseStatus").textContent = "";
-  });
-  document.getElementById("bulkImportFile").addEventListener("change", async (event) => {
-    const file = event.target.files?.[0];
-    if (file) document.getElementById("bulkImportText").value = await file.text();
-  });
-  document.getElementById("importAllValidQuestionsBtn").addEventListener("click", importBulkQuestions);
+    });
+  document
+    .getElementById("bulkImportFile")
+    .addEventListener("change", async (event) => {
+      const file = event.target.files?.[0];
+      if (file)
+        document.getElementById("bulkImportText").value = await file.text();
+    });
+  document
+    .getElementById("importAllValidQuestionsBtn")
+    .addEventListener("click", importBulkQuestions);
 }
 
 /* =========================================================================
@@ -3405,7 +3667,16 @@ function setupBulkImportListeners() {
 // Builds an SVG ring for any "percent complete" style stat (score, accuracy,
 // time-left, etc). Returns an HTML string; callers set it via innerHTML.
 // value: 0-100. size/stroke in px. color: any CSS color or var(--token).
-function renderRadialProgress(value, { size = 120, stroke = 10, color = "var(--brand)", numLabel = null, subLabel = "" } = {}) {
+function renderRadialProgress(
+  value,
+  {
+    size = 120,
+    stroke = 10,
+    color = "var(--brand)",
+    numLabel = null,
+    subLabel = "",
+  } = {},
+) {
   const pct = Math.max(0, Math.min(100, value));
   const r = (size - stroke) / 2;
   const c = 2 * Math.PI * r;
@@ -3447,14 +3718,30 @@ function renderAnalyticsDemo() {
   if (!row || row.dataset.rendered) return;
   row.dataset.rendered = "1";
   row.innerHTML =
-    renderRadialProgress(72, { size: 108, stroke: 9, color: "var(--brand)", subLabel: "Accuracy" }) +
-    renderRadialProgress(88, { size: 108, stroke: 9, color: "var(--success)", subLabel: "Answered" }) +
-    renderRadialProgress(46, { size: 108, stroke: 9, color: "var(--review)", subLabel: "Time used" });
+    renderRadialProgress(72, {
+      size: 108,
+      stroke: 9,
+      color: "var(--brand)",
+      subLabel: "Accuracy",
+    }) +
+    renderRadialProgress(88, {
+      size: 108,
+      stroke: 9,
+      color: "var(--success)",
+      subLabel: "Answered",
+    }) +
+    renderRadialProgress(46, {
+      size: 108,
+      stroke: 9,
+      color: "var(--review)",
+      subLabel: "Time used",
+    });
   animateRadialProgress(row);
 }
 
 function analyticsBar(value, max, color) {
-  const width = max > 0 ? Math.max(0, Math.min(100, (Number(value) / max) * 100)) : 0;
+  const width =
+    max > 0 ? Math.max(0, Math.min(100, (Number(value) / max) * 100)) : 0;
   return `<div class="analytics-bar"><span style="width:${width}%;background:${color}"></span></div>`;
 }
 
@@ -3463,10 +3750,20 @@ function renderAnalyticsCharts(data) {
   const outcomes = data.outcomes || {};
   const subjects = data.subjects || [];
   const trend = data.trend || [];
-  const totalOutcome = Number(outcomes.correct || 0) + Number(outcomes.wrong || 0) + Number(outcomes.unattempted || 0);
-  const correctPct = totalOutcome ? (Number(outcomes.correct || 0) / totalOutcome) * 100 : 0;
-  const wrongPct = totalOutcome ? (Number(outcomes.wrong || 0) / totalOutcome) * 100 : 0;
-  const trendMax = Math.max(...trend.map((item) => Number(item.percentage) || 0), 1);
+  const totalOutcome =
+    Number(outcomes.correct || 0) +
+    Number(outcomes.wrong || 0) +
+    Number(outcomes.unattempted || 0);
+  const correctPct = totalOutcome
+    ? (Number(outcomes.correct || 0) / totalOutcome) * 100
+    : 0;
+  const wrongPct = totalOutcome
+    ? (Number(outcomes.wrong || 0) / totalOutcome) * 100
+    : 0;
+  const trendMax = Math.max(
+    ...trend.map((item) => Number(item.percentage) || 0),
+    1,
+  );
 
   return `
     <div class="analytics-stat-grid">
@@ -3501,7 +3798,9 @@ function renderHistoryCards(history, targetId) {
     target.innerHTML = `<div class="empty-state">No submitted tests yet. Your detailed reports will appear here.</div>`;
     return;
   }
-  target.innerHTML = history.map((item) => `
+  target.innerHTML = history
+    .map(
+      (item) => `
     <article class="history-card">
       <div class="history-card-main">
         <div class="history-card-title">${escapeHtml(item.test_title)}</div>
@@ -3510,7 +3809,9 @@ function renderHistoryCards(history, targetId) {
       <div class="history-card-score"><strong>${item.percentage ?? 0}%</strong><span>${item.total_score} / ${item.total_marks}</span></div>
       <div class="history-card-stats"><span>${item.correct_count} correct</span><span>${item.wrong_count} wrong</span><span>${item.accuracy ?? 0}% accuracy</span></div>
       <a class="btn btn-primary btn-sm" href="#/result?attempt=${encodeURIComponent(item.attempt_id)}">View full report</a>
-    </article>`).join("");
+    </article>`,
+    )
+    .join("");
 }
 
 async function renderAnalysisHistory() {
@@ -3538,11 +3839,62 @@ async function enterGlobalLeaderboardView() {
     content.innerHTML = `<div class="empty-state">The global leaderboard will appear after declared results are available.</div>`;
     return;
   }
+
   const myId = myProfile?.id;
-  const top = data.slice(0, 3);
+  const top10 = data.slice(0, 10);
+  const top3 = data.slice(0, 3);
+  const myRow = data.find((row) => row.user_id === myId);
+  const iAmInTop10 = top10.some((row) => row.user_id === myId);
+
+  const podiumHtml = `<div class="leaderboard-podium">${top3
+    .map(
+      (row, index) =>
+        `<div class="podium-card podium-${index + 1}"><span>${medalFor(index + 1)}</span><strong>${escapeHtml(row.full_name || "Student")}</strong><b>#${row.rnk}</b><small>${row.average_score}% average · ${row.tests_completed} tests</small></div>`,
+    )
+    .join("")}</div>`;
+
+  const rowsHtml = top10
+    .map(
+      (row) => `
+      <tr class="${row.user_id === myId ? "me" : ""}">
+        <td>#${row.rnk}</td>
+        <td>${escapeHtml(row.full_name || "Student")}${row.user_id === myId ? ' <span class="you-badge">YOU</span>' : ""}</td>
+        <td>${row.tests_completed}</td>
+        <td>${row.average_score}%</td>
+        <td>${row.average_accuracy}%</td>
+        <td>${row.best_score}%</td>
+        <td>${formatDurationPrecise(row.total_time_seconds)}</td>
+      </tr>`,
+    )
+    .join("");
+
+  const yourRankCardHtml =
+    !iAmInTop10 && myRow
+      ? `
+    <div class="card your-rank-card" style="margin-top:12px;">
+      <h2 style="font-size:14px;">Your Rank</h2>
+      <p style="font-size:14px;">
+        Rank: #${myRow.rnk} &nbsp;·&nbsp; Tests: ${myRow.tests_completed} &nbsp;·&nbsp;
+        Average score: ${myRow.average_score}% &nbsp;·&nbsp; Accuracy: ${myRow.average_accuracy}% &nbsp;·&nbsp;
+        Best score: ${myRow.best_score}% &nbsp;·&nbsp; Total time: ${formatDurationPrecise(myRow.total_time_seconds)}
+      </p>
+    </div>`
+      : "";
+
   content.innerHTML = `
-    <div class="leaderboard-podium">${top.map((row, index) => `<div class="podium-card podium-${index + 1}"><span>${medalFor(index + 1)}</span><strong>${escapeHtml(row.full_name || "Student")}</strong><b>#${row.rnk}</b><small>${row.average_score}% average · ${row.tests_completed} tests</small></div>`).join("")}</div>
-    <div class="card leaderboard-table-card"><div class="table-scroll"><table class="report-table"><thead><tr><th>Rank</th><th>Student</th><th>Tests</th><th>Average score</th><th>Accuracy</th><th>Best score</th></tr></thead><tbody>${data.map((row) => `<tr class="${row.user_id === myId ? "me" : ""}"><td>${medalFor(row.rnk)}${row.rnk}</td><td>${escapeHtml(row.full_name || "Student")}${row.user_id === myId ? " (you)" : ""}</td><td>${row.tests_completed}</td><td>${row.average_score}%</td><td>${row.average_accuracy}%</td><td>${row.best_score}%</td></tr>`).join("")}</tbody></table></div></div>`;
+    ${podiumHtml}
+    <div class="card leaderboard-table-card">
+      <div class="table-scroll">
+        <table class="report-table">
+          <thead>
+            <tr><th>Rank</th><th>Student</th><th>Tests</th><th>Average score</th><th>Accuracy</th><th>Best score</th><th>Total time</th></tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+      </div>
+    </div>
+    ${yourRankCardHtml}
+  `;
 }
 
 async function enterProfilePlaceholder() {
@@ -3550,48 +3902,71 @@ async function enterProfilePlaceholder() {
   const name = myProfile?.full_name || "Student";
   const roleLine = myProfile?.role === "admin" ? "Admin" : "JEE Aspirant";
   const content = document.getElementById("profileContent");
-  const options = (values) => values.map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join("");
+  const options = (values) =>
+    values
+      .map(
+        (value) =>
+          `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`,
+      )
+      .join("");
   content.innerHTML = `<div class="profile-hero"><div class="profile-avatar-large">${escapeHtml(name.trim().charAt(0).toUpperCase() || "S")}</div><div><span class="eyebrow-label">Your account</span><h1>${escapeHtml(name)}</h1><p>${roleLine} · ${escapeHtml(myProfile?.email || "")}</p></div><a class="btn btn-sm" href="#/analytics">Open analytics</a></div><section class="card profile-edit-card"><div class="section-title"><div><span class="eyebrow-label">Required before your first test</span><h2>Student profile</h2></div><span id="profileSaveStatus" class="text-muted"></span></div><form id="profileEditForm" class="profile-edit-form profile-details-form"><label>Full name *<input type="text" id="profileNameInput" value="${escapeHtml(myProfile?.full_name || "")}" maxlength="120" required></label><label>Email *<input type="email" id="profileEmailInput" value="${escapeHtml(myProfile?.email || "")}" required></label><label>Mobile number<input type="tel" id="profileMobileInput" value="${escapeHtml(myProfile?.mobile_number || "")}" maxlength="20"></label><label>Date of birth / age<input type="date" id="profileDobInput" value="${escapeHtml(myProfile?.date_of_birth || "")}"></label><label>Gender (optional)<select id="profileGenderInput"><option value="">Prefer not to say</option>${options(["Female", "Male", "Non-binary", "Other"])}</select></label><label>Class / grade *<input type="text" id="profileClassInput" value="${escapeHtml(myProfile?.class_grade || "")}" maxlength="40" required></label><label>Target exam<select id="profileTargetInput"><option value="">Select target exam</option>${options(["JEE Main", "JEE Advanced", "NEET", "Olympiads", "Other"])}</select></label><label>Board<select id="profileBoardInput"><option value="">Select board</option>${options(["CBSE", "ICSE", "State Board", "Other"])}</select></label><button type="submit" class="btn btn-primary">Save profile</button></form></section><div class="section-title profile-history-heading"><div><span class="eyebrow-label">Your activity</span><h2>Test history</h2></div></div><div id="profileHistory" class="history-list"><div class="empty-state">Loading test history…</div></div>`;
   if (qs("complete")) {
     const notice = document.createElement("div");
     notice.className = "locked-banner profile-required-notice";
-    notice.textContent = "Complete the required fields below before starting your test.";
+    notice.textContent =
+      "Complete the required fields below before starting your test.";
     content.insertBefore(notice, content.firstChild);
   }
   document.getElementById("profileGenderInput").value = myProfile?.gender || "";
-  document.getElementById("profileTargetInput").value = myProfile?.target_exam || "";
+  document.getElementById("profileTargetInput").value =
+    myProfile?.target_exam || "";
   document.getElementById("profileBoardInput").value = myProfile?.board || "";
-  document.getElementById("profileEditForm").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const button = event.currentTarget.querySelector("button");
-    const nextName = document.getElementById("profileNameInput").value.trim();
-    const nextEmail = document.getElementById("profileEmailInput").value.trim();
-    const nextClass = document.getElementById("profileClassInput").value.trim();
-    if (!nextName || !nextEmail || !nextClass) return;
-    button.disabled = true;
-    const { data, error } = await sb.from("profiles").update({
-      full_name: nextName,
-      email: nextEmail,
-      mobile_number: document.getElementById("profileMobileInput").value.trim() || null,
-      date_of_birth: document.getElementById("profileDobInput").value || null,
-      gender: document.getElementById("profileGenderInput").value || null,
-      class_grade: nextClass,
-      target_exam: document.getElementById("profileTargetInput").value || null,
-      board: document.getElementById("profileBoardInput").value || null,
-    }).eq("id", myProfile.id).select().single();
-    button.disabled = false;
-    if (error) {
-      toast(friendlyError(error), "error");
-      return;
-    }
-    myProfile = data;
-    document.getElementById("profileSaveStatus").textContent = "Saved";
-    toast("Profile updated", "success");
-    await syncAppShell(currentRoute.path.slice(1), true);
-  });
+  document
+    .getElementById("profileEditForm")
+    .addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const button = event.currentTarget.querySelector("button");
+      const nextName = document.getElementById("profileNameInput").value.trim();
+      const nextEmail = document
+        .getElementById("profileEmailInput")
+        .value.trim();
+      const nextClass = document
+        .getElementById("profileClassInput")
+        .value.trim();
+      if (!nextName || !nextEmail || !nextClass) return;
+      button.disabled = true;
+      const { data, error } = await sb
+        .from("profiles")
+        .update({
+          full_name: nextName,
+          email: nextEmail,
+          mobile_number:
+            document.getElementById("profileMobileInput").value.trim() || null,
+          date_of_birth:
+            document.getElementById("profileDobInput").value || null,
+          gender: document.getElementById("profileGenderInput").value || null,
+          class_grade: nextClass,
+          target_exam:
+            document.getElementById("profileTargetInput").value || null,
+          board: document.getElementById("profileBoardInput").value || null,
+        })
+        .eq("id", myProfile.id)
+        .select()
+        .single();
+      button.disabled = false;
+      if (error) {
+        toast(friendlyError(error), "error");
+        return;
+      }
+      myProfile = data;
+      document.getElementById("profileSaveStatus").textContent = "Saved";
+      toast("Profile updated", "success");
+      await syncAppShell(currentRoute.path.slice(1), true);
+    });
   const { data, error } = await sb.rpc("get_student_test_history");
   if (error) {
-    document.getElementById("profileHistory").innerHTML = `<div class="error-box">${escapeHtml(friendlyError(error))}</div>`;
+    document.getElementById("profileHistory").innerHTML =
+      `<div class="error-box">${escapeHtml(friendlyError(error))}</div>`;
     return;
   }
   renderHistoryCards(data || [], "profileHistory");
@@ -3618,7 +3993,8 @@ async function syncAppShell(viewName, signedIn) {
   const roleEl = document.getElementById("appSidebarUserRole");
   const adminLink = document.getElementById("appNavAdmin");
   const bulkImportLink = document.getElementById("appNavBulkImport");
-  if (avatarEl) avatarEl.textContent = name.trim().charAt(0).toUpperCase() || "S";
+  if (avatarEl)
+    avatarEl.textContent = name.trim().charAt(0).toUpperCase() || "S";
   if (nameEl) nameEl.textContent = name;
   if (roleEl) roleEl.textContent = isAdmin ? "Admin" : "Student";
   if (adminLink) adminLink.style.display = isAdmin ? "" : "none";
@@ -3936,14 +4312,223 @@ function toggleTheme() {
   applyTheme(current === "dark" ? "light" : "dark");
 }
 
+/* =========================================================
+   THEME SYSTEM + DRAGGABLE POSITION
+   ========================================================= */
+
+function applyTheme(theme) {
+  const safeTheme = theme === "dark" ? "dark" : "light";
+
+  document.documentElement.setAttribute("data-theme", safeTheme);
+
+  localStorage.setItem("jee_theme", safeTheme);
+
+  const btn = document.getElementById("themeToggle");
+
+  if (btn) {
+    btn.textContent = safeTheme === "dark" ? "☀️" : "🌙";
+
+    btn.setAttribute(
+      "aria-label",
+      safeTheme === "dark" ? "Switch to light theme" : "Switch to dark theme",
+    );
+
+    btn.title =
+      safeTheme === "dark" ? "Switch to light theme" : "Switch to dark theme";
+  }
+}
+
+function toggleTheme() {
+  const current =
+    document.documentElement.getAttribute("data-theme") || "light";
+
+  applyTheme(current === "dark" ? "light" : "dark");
+}
+
+/* =========================================================
+   DRAGGABLE THEME BUTTON
+   Works with:
+   - Mouse
+   - Touch
+   - Pen
+   ========================================================= */
+
+function setupThemeDrag() {
+  const btn = document.getElementById("themeToggle");
+  if (!btn) return;
+
+  let dragging = false;
+  let moved = false;
+
+  let startX = 0;
+  let startY = 0;
+
+  let startLeft = 0;
+  let startTop = 0;
+
+  let pointerId = null;
+
+  const savedLeft = localStorage.getItem("jee_theme_left");
+  const savedTop = localStorage.getItem("jee_theme_top");
+  const savedForMobile =
+    localStorage.getItem("jee_theme_position_mobile") === "true";
+  const isMobileViewport = () =>
+    window.matchMedia("(max-width: 879px)").matches;
+
+  /* Restore previous position */
+
+  if (
+    savedLeft !== null &&
+    savedTop !== null &&
+    (!isMobileViewport() || savedForMobile)
+  ) {
+    const left = parseFloat(savedLeft);
+    const top = parseFloat(savedTop);
+    const maxLeft = window.innerWidth - btn.offsetWidth;
+    const maxTop = window.innerHeight - btn.offsetHeight;
+
+    if (
+      Number.isFinite(left) &&
+      Number.isFinite(top) &&
+      left >= 0 &&
+      left <= maxLeft &&
+      top >= 0 &&
+      top <= maxTop
+    ) {
+      btn.style.left = `${left}px`;
+      btn.style.top = `${top}px`;
+
+      btn.style.right = "auto";
+      btn.style.bottom = "auto";
+    }
+  }
+
+  btn.addEventListener("pointerdown", (event) => {
+    pointerId = event.pointerId;
+
+    dragging = true;
+    moved = false;
+
+    btn.classList.add("dragging");
+
+    btn.setPointerCapture(pointerId);
+
+    const rect = btn.getBoundingClientRect();
+
+    startX = event.clientX;
+    startY = event.clientY;
+
+    startLeft = rect.left;
+    startTop = rect.top;
+
+    event.preventDefault();
+  });
+
+  btn.addEventListener("pointermove", (event) => {
+    if (!dragging || event.pointerId !== pointerId) return;
+
+    const dx = event.clientX - startX;
+    const dy = event.clientY - startY;
+
+    if (Math.abs(dx) > 4 || Math.abs(dy) > 4) {
+      moved = true;
+    }
+
+    let newLeft = startLeft + dx;
+    let newTop = startTop + dy;
+
+    /* Keep button inside the screen */
+
+    const maxLeft = window.innerWidth - btn.offsetWidth;
+    const maxTop = window.innerHeight - btn.offsetHeight;
+
+    newLeft = Math.max(0, Math.min(newLeft, maxLeft));
+
+    newTop = Math.max(0, Math.min(newTop, maxTop));
+
+    btn.style.left = `${newLeft}px`;
+    btn.style.top = `${newTop}px`;
+
+    btn.style.right = "auto";
+    btn.style.bottom = "auto";
+
+    event.preventDefault();
+  });
+
+  const finishDrag = (event) => {
+    if (!dragging || event.pointerId !== pointerId) return;
+
+    dragging = false;
+
+    btn.classList.remove("dragging");
+
+    /* Save position */
+
+    if (moved) {
+      const rect = btn.getBoundingClientRect();
+
+      localStorage.setItem("jee_theme_left", String(rect.left));
+
+      localStorage.setItem("jee_theme_top", String(rect.top));
+
+      localStorage.setItem(
+        "jee_theme_position_mobile",
+        String(isMobileViewport()),
+      );
+    }
+
+    pointerId = null;
+  };
+
+  btn.addEventListener("pointerup", finishDrag);
+  btn.addEventListener("pointercancel", finishDrag);
+
+  /* Prevent a drag from accidentally toggling the theme */
+
+  btn.addEventListener("click", (event) => {
+    if (moved) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+
+      moved = false;
+      return;
+    }
+
+    toggleTheme();
+  });
+
+  window.addEventListener("resize", () => {
+    const hasMobilePosition =
+      localStorage.getItem("jee_theme_position_mobile") === "true";
+
+    if (isMobileViewport() && !hasMobilePosition) {
+      btn.style.left = "";
+      btn.style.top = "";
+      btn.style.right = "";
+      btn.style.bottom = "";
+      return;
+    }
+
+    if (!btn.style.left || !btn.style.top) return;
+
+    const maxLeft = window.innerWidth - btn.offsetWidth;
+    const maxTop = window.innerHeight - btn.offsetHeight;
+    const left = Math.max(0, Math.min(parseFloat(btn.style.left), maxLeft));
+    const top = Math.max(0, Math.min(parseFloat(btn.style.top), maxTop));
+
+    btn.style.left = `${left}px`;
+    btn.style.top = `${top}px`;
+  });
+}
+
+/* =========================================================
+   THEME INITIALIZATION
+   ========================================================= */
+
 function setupTheme() {
   const savedTheme = localStorage.getItem("jee_theme") || "light";
 
   applyTheme(savedTheme);
 
-  const btn = document.getElementById("themeToggle");
-
-  if (btn) {
-    btn.addEventListener("click", toggleTheme);
-  }
+  setupThemeDrag();
 }
