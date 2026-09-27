@@ -3215,7 +3215,7 @@ async function enterResultView() {
 
     ${
       !declared
-        ? `<div class="locked-banner">Your score is available. Rank and percentile will be announced when the admin declares the results.</div>`
+        ? `<div class="locked-banner">Your score is available. Rank and percentile will be announced when the test is over.</div>`
         : ""
     }
 
@@ -3226,7 +3226,7 @@ async function enterResultView() {
       <div class="stat-card"><div class="val">${formatDurationPrecise(timeTakenSec)}</div><div class="lbl">Time taken</div></div>
     </div>
 
-    ${report.is_owner || report.is_public_top3 ? renderReportAnalysis(report, subjectRows, review) : ""}
+    ${report.is_owner || report.is_public_top3 ? renderReportAnalysis(report, subjectRows, review) : ""}  
 
     <div class="card">
       <h2 style="font-size:16px;">Subject-wise performance</h2>
@@ -3268,7 +3268,7 @@ async function enterResultView() {
       <h2 style="font-size:16px;">Leaderboard</h2>
       ${
         !declared
-          ? `<div class="empty-state">Rank and percentile will be announced when the admin declares the results.</div>`
+          ? `<div class="empty-state">Rank and percentile will be announced when the test gets over.</div>`
           : board.length === 0
             ? `<div class="empty-state">No submissions yet.</div>`
             : `
@@ -3781,12 +3781,28 @@ function renderAnalyticsCharts(data) {
 
 async function enterAnalyticsView() {
   const content = document.getElementById("analyticsContent");
+  const historyContainer = document.getElementById("analysisHistory");
   content.innerHTML = `<div class="empty-state">Loading analytics…</div>`;
+  if (historyContainer) historyContainer.innerHTML = "";
   const { data, error } = await sb.rpc("get_student_analytics");
   if (error || !data) {
     content.innerHTML = `<div class="error-box">${escapeHtml(friendlyError(error) || "Analytics could not be loaded.")}</div>`;
     return;
   }
+
+  const completedTests = Number(data.summary?.completed_tests || 0);
+  if (!completedTests) {
+    content.innerHTML = `
+      <div class="card analytics-empty-card">
+        <span class="analytics-empty-icon">📊</span>
+        <h2>No analytics yet</h2>
+        <p class="text-muted">Attempt a test to view your detailed analytics.</p>
+        <a href="#/tests" class="btn btn-primary">Browse tests</a>
+      </div>
+    `;
+    return;
+  }
+
   content.innerHTML = renderAnalyticsCharts(data);
   await renderAnalysisHistory();
 }
@@ -3909,7 +3925,7 @@ async function enterProfilePlaceholder() {
           `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`,
       )
       .join("");
-  content.innerHTML = `<div class="profile-hero"><div class="profile-avatar-large">${escapeHtml(name.trim().charAt(0).toUpperCase() || "S")}</div><div><span class="eyebrow-label">Your account</span><h1>${escapeHtml(name)}</h1><p>${roleLine} · ${escapeHtml(myProfile?.email || "")}</p></div><a class="btn btn-sm" href="#/analytics">Open analytics</a></div><section class="card profile-edit-card"><div class="section-title"><div><span class="eyebrow-label">Required before your first test</span><h2>Student profile</h2></div><span id="profileSaveStatus" class="text-muted"></span></div><form id="profileEditForm" class="profile-edit-form profile-details-form"><label>Full name *<input type="text" id="profileNameInput" value="${escapeHtml(myProfile?.full_name || "")}" maxlength="120" required></label><label>Email *<input type="email" id="profileEmailInput" value="${escapeHtml(myProfile?.email || "")}" required></label><label>Mobile number<input type="tel" id="profileMobileInput" value="${escapeHtml(myProfile?.mobile_number || "")}" maxlength="20"></label><label>Date of birth / age<input type="date" id="profileDobInput" value="${escapeHtml(myProfile?.date_of_birth || "")}"></label><label>Gender (optional)<select id="profileGenderInput"><option value="">Prefer not to say</option>${options(["Female", "Male", "Non-binary", "Other"])}</select></label><label>Class / grade *<input type="text" id="profileClassInput" value="${escapeHtml(myProfile?.class_grade || "")}" maxlength="40" required></label><label>Target exam<select id="profileTargetInput"><option value="">Select target exam</option>${options(["JEE Main", "JEE Advanced", "NEET", "Olympiads", "Other"])}</select></label><label>Board<select id="profileBoardInput"><option value="">Select board</option>${options(["CBSE", "ICSE", "State Board", "Other"])}</select></label><button type="submit" class="btn btn-primary">Save profile</button></form></section><div class="section-title profile-history-heading"><div><span class="eyebrow-label">Your activity</span><h2>Test history</h2></div></div><div id="profileHistory" class="history-list"><div class="empty-state">Loading test history…</div></div>`;
+  content.innerHTML = `<div class="profile-hero"><div class="profile-avatar-large">${escapeHtml(name.trim().charAt(0).toUpperCase() || "S")}</div><div><span class="eyebrow-label">Your account</span><h1>${escapeHtml(name)}</h1><p>${roleLine} · ${escapeHtml(myProfile?.email || "")}</p></div><a class="btn btn-sm" href="#/analytics">Open analytics</a></div><section class="card profile-edit-card"><div class="section-title"><div><span class="eyebrow-label">Required before your first test</span><h2>Student profile</h2></div><span id="profileSaveStatus" class="text-muted"></span></div><form id="profileEditForm" class="profile-edit-form profile-details-form"><label>Full name *<input type="text" id="profileNameInput" value="${escapeHtml(myProfile?.full_name || "")}" maxlength="120" required></label><label>Email *<input type="email" id="profileEmailInput" value="${escapeHtml(myProfile?.email || "")}" required></label><label>Mobile number<input type="tel" id="profileMobileInput" inputmode="tel" autocomplete="tel" placeholder="e.g. 98765 43210" value="${escapeHtml(myProfile?.mobile_number || "")}" maxlength="20"></label><label>Date of birth / age<input type="date" id="profileDobInput" value="${escapeHtml(myProfile?.date_of_birth || "")}"></label><label>Gender (optional)<select id="profileGenderInput"><option value="">Prefer not to say</option>${options(["Female", "Male", "Non-binary", "Other"])}</select></label><label>Class / grade *<input type="text" id="profileClassInput" value="${escapeHtml(myProfile?.class_grade || "")}" maxlength="40" required></label><label>Target exam<select id="profileTargetInput"><option value="">Select target exam</option>${options(["JEE Main", "JEE Advanced", "NEET", "Olympiads", "Other"])}</select></label><label>Board<select id="profileBoardInput"><option value="">Select board</option>${options(["CBSE", "ICSE", "State Board", "Other"])}</select></label><button type="submit" class="btn btn-primary">Save profile</button></form></section><div class="section-title profile-history-heading"><div><span class="eyebrow-label">Your activity</span><h2>Test history</h2></div></div><div id="profileHistory" class="history-list"><div class="empty-state">Loading test history…</div></div>`;
   if (qs("complete")) {
     const notice = document.createElement("div");
     notice.className = "locked-banner profile-required-notice";
@@ -4518,7 +4534,7 @@ function setupThemeDrag() {
 
     btn.style.left = `${left}px`;
     btn.style.top = `${top}px`;
-  });
+  }); 
 }
 
 /* =========================================================
