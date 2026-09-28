@@ -786,31 +786,23 @@
 
         <div class="exam-palette-panel" id="palettePanel">
           <div class="palette-header">
-            <h3>Question palette</h3>
-            <button type="button" class="palette-close" id="paletteCloseBtn">×</button>
+            <div class="palette-title-wrap">
+              <h3>Question palette</h3>
+              <span class="palette-subject" id="paletteSubjectLabel"></span>
+            </div>
+            <button type="button" class="palette-close" id="paletteCloseBtn" aria-label="Close palette">×</button>
+          </div>
+
+          <div class="palette-progress">
+            <div class="palette-progress-text"><span>Answered</span><strong id="paletteProgressText">0 / 0</strong></div>
+            <div class="palette-progress-bar"><i id="paletteProgressFill"></i></div>
           </div>
 
           <div class="palette-legend">
-            <div class="legend-item">
-              <span class="legend-swatch"
-                style="background:var(--not-visited-tint);border:1px solid var(--border-strong);"></span>
-              Not visited
-            </div>
-
-            <div class="legend-item">
-              <span class="legend-swatch" style="background:var(--danger);"></span>
-              Not answered
-            </div>
-
-            <div class="legend-item">
-              <span class="legend-swatch" style="background:var(--success);"></span>
-              Answered
-            </div>
-
-            <div class="legend-item">
-              <span class="legend-swatch" style="background:var(--review);"></span>
-              Marked for review
-            </div>
+            <div class="legend-item"><span class="legend-swatch sw-notvisited"></span>Not visited<b id="palCountNotVisited">0</b></div>
+            <div class="legend-item"><span class="legend-swatch sw-notanswered"></span>Not answered<b id="palCountNotAnswered">0</b></div>
+            <div class="legend-item"><span class="legend-swatch sw-answered"></span>Answered<b id="palCountAnswered">0</b></div>
+            <div class="legend-item"><span class="legend-swatch sw-marked"></span>Marked<b id="palCountMarked">0</b></div>
           </div>
 
           <div class="palette-grid" id="paletteGrid"></div>
@@ -1047,7 +1039,7 @@
       <div class="fodal-actions"><button class="btn" id="cancelReportBtn">Cancel</button><button class="btn btn-primary"
           id="submitReportBtn">Send report</button></div>
     </div>   
-  </div> 
+  </div>  
  
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>

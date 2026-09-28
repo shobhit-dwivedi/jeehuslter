@@ -1562,21 +1562,50 @@ async function loadQuestions() {
     return;
   }
 
-  list.innerHTML = data
-    .map(
-      (q, i) => `
+  // Group by subject (Physics, Chemistry, Mathematics, Biology first, then any
+  // custom subjects alphabetically); keep the admin's own order within a subject.
+  const SUBJECT_ORDER = ["Physics", "Chemistry", "Mathematics", "Biology"];
+  const subjectRank = (name) => {
+    const idx = SUBJECT_ORDER.indexOf(name);
+    return idx === -1 ? SUBJECT_ORDER.length : idx;
+  };
+  const groups = {};
+  data.forEach((q) => {
+    const key = q.subject || "Other";
+    (groups[key] = groups[key] || []).push(q);
+  });
+  const subjectNames = Object.keys(groups).sort(
+    (x, y) => subjectRank(x) - subjectRank(y) || x.localeCompare(y),
+  );
+
+  list.innerHTML = subjectNames
+    .map((subject) => {
+      const items = groups[subject];
+      const totalMarks = items.reduce((sum, q) => sum + Number(q.positive_marks || 0), 0);
+      const rows = items
+        .map(
+          (q, i) => `
     <div class="list-row">
       <div class="list-row-main">
         <div class="list-row-title">Q${i + 1}. ${escapeHtml(q.question_text.slice(0, 90))}${q.question_text.length > 90 ? "…" : ""}</div>
-        <div class="list-row-meta">${subjectDot(q.subject)}${escapeHtml(q.subject)} · ${q.question_type === "mcq" ? "MCQ" : "Integer"} · +${q.positive_marks} / -${q.negative_marks}${q.explanation ? " · has explanation" : ""}</div>
+        <div class="list-row-meta">${q.question_type === "mcq" ? "MCQ" : "Integer"} · +${q.positive_marks} / -${q.negative_marks}${q.explanation ? " · has explanation" : ""}</div>
       </div>
       <div class="list-row-actions">
         <button class="btn btn-sm js-edit-question" data-id="${q.id}">Edit</button>
         <button class="btn btn-sm btn-danger js-delete-question" data-id="${q.id}">Delete</button>
       </div>
-    </div>
-  `,
-    )
+    </div>`,
+        )
+        .join("");
+      return `
+    <section class="question-subject-group">
+      <div class="question-subject-header" style="--subject-color:${subjectColor(subject)}">
+        <span class="question-subject-name">${subjectDot(subject)}${escapeHtml(subject)}</span>
+        <span class="question-subject-stats">${items.length} question${items.length === 1 ? "" : "s"} · ${totalMarks} marks</span>
+      </div>
+      <div class="question-subject-rows">${rows}</div>
+    </section>`;
+    })
     .join("");
 
   list.querySelectorAll(".js-delete-question").forEach((btn) => {
@@ -2113,10 +2142,10 @@ function renderBeginInstructions() {
     <div class="instruction-section">
       <strong>3. Question Palette — Legend</strong>
       <div class="palette-legend">
-        <div class="legend-item"><span class="legend-swatch" style="background:var(--not-visited-tint);border:1px solid var(--border-strong);"></span>Not visited</div>
-        <div class="legend-item"><span class="legend-swatch" style="background:var(--danger);"></span>Not answered</div>
-        <div class="legend-item"><span class="legend-swatch" style="background:var(--success);"></span>Answered</div>
-        <div class="legend-item"><span class="legend-swatch" style="background:var(--review);"></span>Marked for review</div>
+        <div class="legend-item"><span class="legend-swatch sw-notvisited"></span>Not visited</div>
+        <div class="legend-item"><span class="legend-swatch sw-notanswered"></span>Not answered</div>
+        <div class="legend-item"><span class="legend-swatch sw-answered"></span>Answered</div>
+        <div class="legend-item"><span class="legend-swatch sw-marked"></span>Marked for review</div>
       </div>
     </div>
 
@@ -2364,9 +2393,30 @@ function renderSubjectTabs() {
   });
 }
 
+function updatePaletteSummary(list) {
+  const count = (fn) => list.filter(fn).length;
+  const answered = count((q) => q.status === "answered" || q.status === "answered_marked");
+  const marked = count((q) => q.status === "marked" || q.status === "answered_marked");
+  const notVisited = count((q) => q.status === "not_visited");
+  const notAnswered = count((q) => q.status === "not_answered");
+  const set = (id, v) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = v;
+  };
+  set("paletteSubjectLabel", currentSubject || "");
+  set("paletteProgressText", `${answered} / ${list.length}`);
+  set("palCountNotVisited", notVisited);
+  set("palCountNotAnswered", notAnswered);
+  set("palCountAnswered", answered);
+  set("palCountMarked", marked);
+  const fill = document.getElementById("paletteProgressFill");
+  if (fill) fill.style.width = list.length ? `${(answered / list.length) * 100}%` : "0%";
+}
+
 function renderPalette() {
   const grid = document.getElementById("paletteGrid");
   const list = bySubject[currentSubject] || [];
+  updatePaletteSummary(list);
   grid.innerHTML = list
     .map(
       (q, i) =>
@@ -4547,4 +4597,4 @@ function setupTheme() {
   applyTheme(savedTheme);
 
   setupThemeDrag();
-}
+} 
