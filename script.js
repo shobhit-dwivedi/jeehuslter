@@ -1115,6 +1115,7 @@ async function deleteTest(id) {
    ========================================================================= */
 let currentTest = null;
 let questionCounter = 0;
+let adminQuestionsCache = [];
 let editingQuestionId = null;
 let editingQuestionImageUrl = null;
 
@@ -1537,9 +1538,55 @@ function renderShareCard() {
   tag.textContent =
     state === "live" ? "Live" : state === "closed" ? "Closed" : "Locked";
   tag.className = "status-tag " + state;
-  document.getElementById("scheduleSummary").textContent =
-    `Students see this test automatically. Publishes ${formatDateTime(currentTest.available_from)} · closes ${formatDateTime(currentTest.available_until)}.`;
+  const showWhenLocked = currentTest.show_when_locked !== false;
+  document.getElementById("scheduleSummary").textContent = showWhenLocked
+    ? `Students see this test as Locked and it goes live automatically. Publishes ${formatDateTime(currentTest.available_from)} · closes ${formatDateTime(currentTest.available_until)}.`
+    : `Hidden from students until it goes live automatically on ${formatDateTime(currentTest.available_from)} · closes ${formatDateTime(currentTest.available_until)}.`;
+  renderVisibilityButton(showWhenLocked);
 }
+
+function renderVisibilityButton(showWhenLocked) {
+  const btn = document.getElementById("visibilityToggleBtn");
+  const hint = document.getElementById("visibilityHint");
+  if (!btn) return;
+  btn.classList.toggle("is-shown", showWhenLocked);
+  btn.classList.toggle("is-hidden", !showWhenLocked);
+  btn.setAttribute("aria-pressed", String(showWhenLocked));
+  btn.querySelector(".visibility-btn-icon").textContent = showWhenLocked ? "👁" : "🚫";
+  btn.querySelector(".visibility-btn-label").textContent = showWhenLocked ? "Shown" : "Hidden";
+  btn.title = showWhenLocked ? "Click to hide this test from students until it goes live" : "Click to show this test to students as Locked";
+  if (hint) {
+    hint.textContent = showWhenLocked
+      ? "Shown: students can see this test as Locked before it goes live. Click to hide it."
+      : "Hidden: students cannot see this test until it goes live. Click to show it as Locked.";
+  }
+}
+
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest("#visibilityToggleBtn");
+  if (!btn || !currentTest || btn.disabled) return;
+  const next = currentTest.show_when_locked === false; // flip: hidden -> shown, shown -> hidden
+  btn.disabled = true;
+  const { data, error } = await sb
+    .from("tests")
+    .update({ show_when_locked: next })
+    .eq("id", currentTest.id)
+    .select()
+    .single();
+  btn.disabled = false;
+  if (error) {
+    toast(
+      /show_when_locked/.test(error.message || "")
+        ? "Run the show_when_locked.sql migration in Supabase first."
+        : friendlyError(error),
+      "error",
+    );
+    return;
+  }
+  currentTest = data;
+  renderShareCard();
+  toast(next ? "Test is now shown to students as Locked" : "Test is now hidden from students until it goes live", "success");
+});
 
 async function loadQuestions() {
   const { data, error } = await sb
@@ -1555,6 +1602,7 @@ async function loadQuestions() {
   }
 
   questionCounter = data.length;
+  adminQuestionsCache = data;
   countTag.textContent = `${data.length} question${data.length === 1 ? "" : "s"}`;
 
   if (data.length === 0) {
@@ -1574,6 +1622,14 @@ async function loadQuestions() {
     const key = q.subject || "Other";
     (groups[key] = groups[key] || []).push(q);
   });
+  // Inside each subject: MCQs first, then Integer-type; original order kept within each type.
+  const typeRank = (q) => (q.question_type === "mcq" ? 0 : 1);
+  Object.keys(groups).forEach((key) => {
+    groups[key] = groups[key]
+      .map((q, idx) => ({ q, idx }))
+      .sort((x, y) => typeRank(x.q) - typeRank(y.q) || x.idx - y.idx)
+      .map((x) => x.q);
+  });
   const subjectNames = Object.keys(groups).sort(
     (x, y) => subjectRank(x) - subjectRank(y) || x.localeCompare(y),
   );
@@ -1582,9 +1638,19 @@ async function loadQuestions() {
     .map((subject) => {
       const items = groups[subject];
       const totalMarks = items.reduce((sum, q) => sum + Number(q.positive_marks || 0), 0);
+      const mcqCount = items.filter((q) => q.question_type === "mcq").length;
+      const intCount = items.length - mcqCount;
       const rows = items
         .map(
-          (q, i) => `
+          (q, i) => `${
+            i === 0 && mcqCount
+              ? `<div class="question-type-label">MCQ · ${mcqCount}</div>`
+              : ""
+          }${
+            i === mcqCount && intCount
+              ? `<div class="question-type-label">Integer · ${intCount}</div>`
+              : ""
+          }
     <div class="list-row">
       <div class="list-row-main">
         <div class="list-row-title">Q${i + 1}. ${escapeHtml(q.question_text.slice(0, 90))}${q.question_text.length > 90 ? "…" : ""}</div>
@@ -1598,10 +1664,10 @@ async function loadQuestions() {
         )
         .join("");
       return `
-    <section class="question-subject-group">
+    <section class="question-subject-group" style="--subject-color:${subjectColor(subject)}">
       <div class="question-subject-header" style="--subject-color:${subjectColor(subject)}">
         <span class="question-subject-name">${subjectDot(subject)}${escapeHtml(subject)}</span>
-        <span class="question-subject-stats">${items.length} question${items.length === 1 ? "" : "s"} · ${totalMarks} marks</span>
+        <span class="question-subject-stats">${items.length} question${items.length === 1 ? "" : "s"} · ${mcqCount} MCQ · ${intCount} Integer · ${totalMarks} marks</span>
       </div>
       <div class="question-subject-rows">${rows}</div>
     </section>`;
@@ -1617,6 +1683,266 @@ async function loadQuestions() {
     );
   });
 }
+
+/* =========================================================================
+   ADMIN — test preview (mirrors the real exam interface, read-only)
+   ========================================================================= */
+let pv = null;
+
+function pvQuestionIssues(q) {
+  const issues = [];
+  if (!String(q.question_text || "").trim()) issues.push("Question text is empty");
+  if (q.question_type === "mcq") {
+    const opts = q.options || [];
+    if (opts.length < 2) issues.push("Fewer than 2 options");
+    if (opts.some((o) => !String(o.text || "").trim())) issues.push("An option is empty");
+    if (!q.correct_option || !opts.some((o) => o.id === q.correct_option))
+      issues.push("Correct option is missing or invalid");
+  } else if (q.correct_integer_value === null || q.correct_integer_value === undefined || q.correct_integer_value === "") {
+    issues.push("Correct integer answer is missing");
+  }
+  return issues;
+}
+
+function openTestPreview() {
+  if (!adminQuestionsCache.length) {
+    toast("Add at least one question to preview the test.", "error");
+    return;
+  }
+  const bySubj = {};
+  const subjList = [];
+  adminQuestionsCache.forEach((q) => {
+    const key = q.subject || "Other";
+    if (!bySubj[key]) {
+      bySubj[key] = [];
+      subjList.push(key);
+    }
+    bySubj[key].push(q);
+  });
+  Object.keys(bySubj).forEach((k) => {
+    bySubj[k] = bySubj[k]
+      .map((q, idx) => ({ q, idx }))
+      .sort((x, y) => (x.q.question_type === "mcq" ? 0 : 1) - (y.q.question_type === "mcq" ? 0 : 1) || x.idx - y.idx)
+      .map((x) => x.q);
+  });
+  pv = { bySubj, subjList, subject: subjList[0], index: 0, showAnswers: true };
+
+  const el = document.createElement("div");
+  el.className = "admin-preview-overlay";
+  el.id = "adminPreviewOverlay";
+  el.innerHTML = `
+    <div class="admin-preview-banner">
+      <div class="pv-banner-left">
+        <span class="pv-badge">👁 Admin preview</span>
+        <span class="pv-banner-note">Read-only · nothing is saved · students are not affected</span>
+      </div>
+      <div class="pv-banner-right">
+        <label class="pv-switch" title="Show or hide correct answers and explanations">
+          <input type="checkbox" id="pvShowAnswers" checked>
+          <span class="pv-switch-track"><i></i></span>
+          <span class="pv-switch-label">Show answers</span>
+        </label>
+        <button type="button" class="pv-close-btn" id="pvCloseBtn">✕ Close preview</button>
+      </div>
+    </div>
+    <div class="exam-topbar">
+      <div class="exam-topbar-inner">
+        <div>
+          <div class="exam-title">${escapeHtml(currentTest?.title || "Test")}</div>
+          <div class="exam-candidate">Admin preview · ${adminQuestionsCache.length} questions</div>
+        </div>
+        <div class="exam-timer">${escapeHtml(String(currentTest?.duration_minutes ?? "--"))} min</div>
+      </div>
+      <div class="subject-tabs" id="pvSubjectTabs"></div>
+    </div>
+    <div class="exam-body">
+      <div class="exam-main"><div class="question-card" id="pvQuestionCard"></div></div>
+      <div class="exam-palette-panel" id="pvPalettePanel">
+        <div class="palette-header">
+          <div class="palette-title-wrap">
+            <h3>Question palette</h3>
+            <span class="palette-subject" id="pvPaletteSubject"></span>
+          </div>
+          <button type="button" class="palette-close" id="pvPaletteClose" aria-label="Close palette">×</button>
+        </div>
+        <div class="palette-progress">
+          <div class="palette-progress-text"><span>Questions look good</span><strong id="pvOkText">0 / 0</strong></div>
+          <div class="palette-progress-bar"><i id="pvOkFill"></i></div>
+        </div>
+        <div class="palette-legend">
+          <div class="legend-item"><span class="legend-swatch sw-answered"></span>Looks good</div>
+          <div class="legend-item"><span class="legend-swatch sw-notanswered"></span>Needs attention</div>
+        </div>
+        <div class="palette-grid" id="pvPaletteGrid"></div>
+      </div>
+      <div class="mobile-exam-actions">
+        <button type="button" class="btn btn-secondary" id="pvPaletteToggle">Questions</button>
+        <button type="button" class="btn btn-danger" id="pvCloseBtn2">Close preview</button>
+      </div>
+      <div class="palette-backdrop" id="pvBackdrop"></div>
+    </div>`;
+  document.body.appendChild(el);
+  document.body.classList.add("admin-preview-open");
+
+  const close = () => closeTestPreview();
+  el.querySelector("#pvCloseBtn").addEventListener("click", close);
+  el.querySelector("#pvCloseBtn2").addEventListener("click", close);
+  el.querySelector("#pvShowAnswers").addEventListener("change", (e) => {
+    pv.showAnswers = e.target.checked;
+    pvRenderQuestion();
+  });
+  const panel = el.querySelector("#pvPalettePanel");
+  const backdrop = el.querySelector("#pvBackdrop");
+  const togglePanel = (open) => {
+    panel.classList.toggle("open", open);
+    backdrop.classList.toggle("open", open);
+  };
+  el.querySelector("#pvPaletteToggle").addEventListener("click", () => togglePanel(!panel.classList.contains("open")));
+  el.querySelector("#pvPaletteClose").addEventListener("click", () => togglePanel(false));
+  backdrop.addEventListener("click", () => togglePanel(false));
+  pv.closePanel = () => togglePanel(false);
+  pv.onKey = (e) => {
+    if (e.key === "Escape") closeTestPreview();
+    else if (e.key === "ArrowRight") pvStep(1);
+    else if (e.key === "ArrowLeft") pvStep(-1);
+  };
+  document.addEventListener("keydown", pv.onKey);
+
+  pvRenderTabs();
+  pvRenderQuestion();
+}
+
+function closeTestPreview() {
+  if (!pv) return;
+  document.removeEventListener("keydown", pv.onKey);
+  document.getElementById("adminPreviewOverlay")?.remove();
+  document.body.classList.remove("admin-preview-open");
+  pv = null;
+}
+
+function pvRenderTabs() {
+  const wrap = document.getElementById("pvSubjectTabs");
+  wrap.innerHTML = pv.subjList
+    .map(
+      (sub) =>
+        `<button type="button" data-subject="${escapeHtml(sub)}" class="${sub === pv.subject ? "active" : ""}">${subjectDot(sub)}${escapeHtml(sub)}</button>`,
+    )
+    .join("");
+  wrap.querySelectorAll("button").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      pv.subject = btn.dataset.subject;
+      pv.index = 0;
+      pvRenderTabs();
+      pvRenderQuestion();
+    }),
+  );
+}
+
+function pvStep(delta) {
+  if (!pv) return;
+  const list = pv.bySubj[pv.subject];
+  let next = pv.index + delta;
+  if (next >= 0 && next < list.length) {
+    pv.index = next;
+  } else {
+    // roll over into the previous / next subject
+    const si = pv.subjList.indexOf(pv.subject) + (delta > 0 ? 1 : -1);
+    if (si < 0 || si >= pv.subjList.length) return;
+    pv.subject = pv.subjList[si];
+    pv.index = delta > 0 ? 0 : pv.bySubj[pv.subject].length - 1;
+    pvRenderTabs();
+  }
+  pvRenderQuestion();
+}
+
+function pvRenderPalette() {
+  const list = pv.bySubj[pv.subject];
+  const okCount = list.filter((q) => !pvQuestionIssues(q).length).length;
+  document.getElementById("pvPaletteSubject").textContent = pv.subject;
+  document.getElementById("pvOkText").textContent = `${okCount} / ${list.length}`;
+  document.getElementById("pvOkFill").style.width = list.length ? `${(okCount / list.length) * 100}%` : "0%";
+  const grid = document.getElementById("pvPaletteGrid");
+  grid.innerHTML = list
+    .map(
+      (q, i) =>
+        `<button type="button" class="palette-btn ${pvQuestionIssues(q).length ? "not_answered" : "answered"} ${i === pv.index ? "current" : ""}" data-i="${i}">${i + 1}</button>`,
+    )
+    .join("");
+  grid.querySelectorAll("button").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      pv.index = parseInt(btn.dataset.i, 10);
+      pv.closePanel();
+      pvRenderQuestion();
+    }),
+  );
+}
+
+function pvRenderQuestion() {
+  const list = pv.bySubj[pv.subject];
+  const q = list[pv.index];
+  const card = document.getElementById("pvQuestionCard");
+  card.style.borderLeft = `4px solid ${subjectColor(q.subject)}`;
+  const issues = pvQuestionIssues(q);
+  const show = pv.showAnswers;
+
+  let bodyHtml;
+  if (q.question_type === "mcq") {
+    bodyHtml =
+      `<div class="option-list">` +
+      (q.options || [])
+        .map(
+          (o) => `
+      <div class="option-item ${show && q.correct_option === o.id ? "review-correct" : ""}">
+        <span class="option-letter">${escapeHtml(o.id)}</span>
+        <span class="option-text">${escapeHtml(o.text || "")}</span>
+        ${show && q.correct_option === o.id ? '<span class="pv-correct-tag">✓ Correct</span>' : ""}
+      </div>`,
+        )
+        .join("") +
+      `</div>`;
+  } else {
+    bodyHtml = `
+      <div class="integer-input-wrap"><input type="number" disabled placeholder="Enter value" value="${show && q.correct_integer_value != null ? escapeHtml(String(q.correct_integer_value)) : ""}"></div>
+      ${show ? `<div class="pv-answer-line">Correct answer: <b>${q.correct_integer_value ?? "—"}</b></div>` : ""}`;
+  }
+
+  const isFirst = pv.subjList.indexOf(pv.subject) === 0 && pv.index === 0;
+  const isLast =
+    pv.subjList.indexOf(pv.subject) === pv.subjList.length - 1 && pv.index === list.length - 1;
+
+  card.innerHTML = `
+    <div class="question-meta">
+      <span class="question-number-badge">${subjectDot(q.subject)}${escapeHtml(q.subject)} · Question ${pv.index + 1}</span>
+      <span class="question-marks">+${q.positive_marks} / -${q.negative_marks}</span>
+    </div>
+    ${issues.length ? `<div class="pv-issues">⚠ ${issues.map(escapeHtml).join(" · ")}</div>` : ""}
+    ${questionImageHtml(q.image_url)}
+    <div class="question-text">${escapeHtml(q.question_text)}</div>
+    ${bodyHtml}
+    ${show && q.explanation ? `<div class="pv-explanation"><strong>Explanation</strong><div>${escapeHtml(q.explanation)}</div></div>` : ""}
+    <div class="exam-actions">
+      <div class="exam-actions-left">
+        <button class="btn js-pv-edit">Edit this question</button>
+      </div>
+      <div class="exam-actions-right">
+        <button class="btn" id="pvPrev" ${isFirst ? "disabled" : ""}>← Previous</button>
+        <button class="btn btn-success" id="pvNext" ${isLast ? "disabled" : ""}>Next →</button>
+      </div>
+    </div>`;
+  card.querySelector("#pvPrev").addEventListener("click", () => pvStep(-1));
+  card.querySelector("#pvNext").addEventListener("click", () => pvStep(1));
+  card.querySelector(".js-pv-edit").addEventListener("click", () => {
+    closeTestPreview();
+    editQuestion(q);
+  });
+  renderMath(card);
+  pvRenderPalette();
+  document.getElementById("adminPreviewOverlay").scrollTo({ top: 0 });
+}
+
+document.addEventListener("click", (e) => {
+  if (e.target.closest("#previewTestBtn")) openTestPreview();
+});
 
 function editQuestion(q) {
   if (!q) return;

@@ -532,6 +532,15 @@
               <span class="status-tag" id="publishTag"></span>
             </div>
             <p class="helper-text" id="scheduleSummary">Students will see this exam automatically on their dashboard when it is live.</p>
+            <div class="visibility-toggle">
+              <span class="visibility-toggle-text">
+                <strong>Visibility to students while locked</strong>
+                <small id="visibilityHint"></small>
+              </span>
+              <button type="button" class="visibility-btn is-shown" id="visibilityToggleBtn" aria-pressed="true">
+                <span class="visibility-btn-icon">👁</span><span class="visibility-btn-label">Shown</span>
+              </button>
+            </div>
           </div>
 
           <div class="card admin-question-card" id="questionsCard" style="display:none;">
@@ -630,8 +639,11 @@
 
           <div class="card" id="questionListCard" style="display:none;">
             <div class="section-title">
-              <h2 style="font-size:16px;">Questions added</h2><span id="questionCountTag" class="text-muted"
-                style="font-size:13px;"></span>
+              <h2 style="font-size:16px;">Questions added</h2>
+              <div class="flex gap-8" style="align-items:center;">
+                <span id="questionCountTag" class="text-muted" style="font-size:13px;"></span>
+                <button type="button" class="btn btn-sm btn-primary" id="previewTestBtn">👁 Preview test</button>
+              </div>
             </div>
             <div id="questionsList"></div>
           </div>
@@ -1039,7 +1051,7 @@
       <div class="fodal-actions"><button class="btn" id="cancelReportBtn">Cancel</button><button class="btn btn-primary"
           id="submitReportBtn">Send report</button></div>
     </div>   
-  </div>  
+  </div> 
  
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
