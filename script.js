@@ -603,10 +603,7 @@ function mergeCatalogWithAttempts(catalog, attempts) {
   (attempts || []).forEach((a) => {
     const existing = latestByTest.get(a.test_id);
 
-    if (
-      !existing ||
-      new Date(a.started_at) > new Date(existing.started_at)
-    ) {
+    if (!existing || new Date(a.started_at) > new Date(existing.started_at)) {
       latestByTest.set(a.test_id, a);
     }
   });
@@ -639,8 +636,16 @@ function setReminder(testId, on) {
 
 function testCardCta(entry) {
   const a = entry.myAttempt;
+  if (entry.is_practice) {
+    // The main (real) test card already offers "Reattempt" — this card is
+    // that re-attempt, so it only ever needs to view or resume itself.
+    if (a && a.status !== "in_progress") {
+      return `<a class="btn btn-sm btn-practice" href="#/result?attempt=${a.id}">View practice report</a>`;
+    }
+    return `<a class="btn btn-sm btn-practice" href="#/exam?test=${encodeURIComponent(entry.id)}&practice=1">Resume practice</a>`;
+  }
   if (a && a.status !== "in_progress") {
-    return `<a class="btn btn-sm" href="#/result?attempt=${a.id}">View Report</a>`;
+    return `<a class="btn btn-sm" href="#/result?attempt=${a.id}">View Report</a> <a class="btn btn-sm btn-secondary" href="#/exam?test=${encodeURIComponent(entry.id)}&practice=1">🔁 Reattempt</a>`;
   }
   if (entry.windowState === "past") {
     return `<a class="btn btn-sm" href="#/test-details?test=${encodeURIComponent(entry.id)}">View details</a>`;
@@ -653,6 +658,9 @@ function testCardCta(entry) {
 }
 
 function testCardMeta(entry) {
+  if (entry.is_practice) {
+    return `${entry.duration_minutes} min · Practice only — not counted for rank`;
+  }
   const parts = [`${entry.duration_minutes} min`];
   if (entry.windowState === "upcoming") {
     parts.push(`Opens ${formatDateTime(entry.available_from)}`);
@@ -678,9 +686,12 @@ function testCardHtml(entry) {
   const attemptTag = entry.myAttempt
     ? `<span class="status-tag ${entry.myAttempt.status}">${entry.myAttempt.status.replace("_", " ")}</span>`
     : "";
+  const practicePill = entry.is_practice
+    ? `<span class="practice-pill">🔁 Practice re-attempt</span>`
+    : "";
   return `
-    <div class="test-card">
-      <div class="test-card-top">${liveBadge}${lifecycleBadge}${categoryBadge(entry.category)}${attemptTag}</div>
+    <div class="test-card ${entry.is_practice ? "test-card-practice" : ""}">
+      <div class="test-card-top">${entry.is_practice ? practicePill : `${liveBadge}${lifecycleBadge}`}${categoryBadge(entry.category)}${attemptTag}</div>
       <h3 class="test-card-title">${escapeHtml(entry.title)}</h3>
       <div class="test-card-meta">${testCardMeta(entry)}</div>
       <div class="test-card-cta">${testCardCta(entry)}</div>
@@ -776,7 +787,7 @@ async function loadTestsCatalog() {
 
   testsCatalogCache = catalog || [];
   applyTestsFilter();
-} 
+}
 function setupTestsCatalogListeners() {
   const searchInput = document.getElementById("testsSearchInput");
   const tabs = document.getElementById("testsStatusTabs");
@@ -1552,9 +1563,15 @@ function renderVisibilityButton(showWhenLocked) {
   btn.classList.toggle("is-shown", showWhenLocked);
   btn.classList.toggle("is-hidden", !showWhenLocked);
   btn.setAttribute("aria-pressed", String(showWhenLocked));
-  btn.querySelector(".visibility-btn-icon").textContent = showWhenLocked ? "👁" : "🚫";
-  btn.querySelector(".visibility-btn-label").textContent = showWhenLocked ? "Shown" : "Hidden";
-  btn.title = showWhenLocked ? "Click to hide this test from students until it goes live" : "Click to show this test to students as Locked";
+  btn.querySelector(".visibility-btn-icon").textContent = showWhenLocked
+    ? "👁"
+    : "🚫";
+  btn.querySelector(".visibility-btn-label").textContent = showWhenLocked
+    ? "Shown"
+    : "Hidden";
+  btn.title = showWhenLocked
+    ? "Click to hide this test from students until it goes live"
+    : "Click to show this test to students as Locked";
   if (hint) {
     hint.textContent = showWhenLocked
       ? "Shown: students can see this test as Locked before it goes live. Click to hide it."
@@ -1585,7 +1602,12 @@ document.addEventListener("click", async (e) => {
   }
   currentTest = data;
   renderShareCard();
-  toast(next ? "Test is now shown to students as Locked" : "Test is now hidden from students until it goes live", "success");
+  toast(
+    next
+      ? "Test is now shown to students as Locked"
+      : "Test is now hidden from students until it goes live",
+    "success",
+  );
 });
 
 async function loadQuestions() {
@@ -1637,7 +1659,10 @@ async function loadQuestions() {
   list.innerHTML = subjectNames
     .map((subject) => {
       const items = groups[subject];
-      const totalMarks = items.reduce((sum, q) => sum + Number(q.positive_marks || 0), 0);
+      const totalMarks = items.reduce(
+        (sum, q) => sum + Number(q.positive_marks || 0),
+        0,
+      );
       const mcqCount = items.filter((q) => q.question_type === "mcq").length;
       const intCount = items.length - mcqCount;
       const rows = items
@@ -1691,14 +1716,20 @@ let pv = null;
 
 function pvQuestionIssues(q) {
   const issues = [];
-  if (!String(q.question_text || "").trim()) issues.push("Question text is empty");
+  if (!String(q.question_text || "").trim())
+    issues.push("Question text is empty");
   if (q.question_type === "mcq") {
     const opts = q.options || [];
     if (opts.length < 2) issues.push("Fewer than 2 options");
-    if (opts.some((o) => !String(o.text || "").trim())) issues.push("An option is empty");
+    if (opts.some((o) => !String(o.text || "").trim()))
+      issues.push("An option is empty");
     if (!q.correct_option || !opts.some((o) => o.id === q.correct_option))
       issues.push("Correct option is missing or invalid");
-  } else if (q.correct_integer_value === null || q.correct_integer_value === undefined || q.correct_integer_value === "") {
+  } else if (
+    q.correct_integer_value === null ||
+    q.correct_integer_value === undefined ||
+    q.correct_integer_value === ""
+  ) {
     issues.push("Correct integer answer is missing");
   }
   return issues;
@@ -1722,7 +1753,11 @@ function openTestPreview() {
   Object.keys(bySubj).forEach((k) => {
     bySubj[k] = bySubj[k]
       .map((q, idx) => ({ q, idx }))
-      .sort((x, y) => (x.q.question_type === "mcq" ? 0 : 1) - (y.q.question_type === "mcq" ? 0 : 1) || x.idx - y.idx)
+      .sort(
+        (x, y) =>
+          (x.q.question_type === "mcq" ? 0 : 1) -
+            (y.q.question_type === "mcq" ? 0 : 1) || x.idx - y.idx,
+      )
       .map((x) => x.q);
   });
   pv = { bySubj, subjList, subject: subjList[0], index: 0, showAnswers: true };
@@ -1797,8 +1832,12 @@ function openTestPreview() {
     panel.classList.toggle("open", open);
     backdrop.classList.toggle("open", open);
   };
-  el.querySelector("#pvPaletteToggle").addEventListener("click", () => togglePanel(!panel.classList.contains("open")));
-  el.querySelector("#pvPaletteClose").addEventListener("click", () => togglePanel(false));
+  el.querySelector("#pvPaletteToggle").addEventListener("click", () =>
+    togglePanel(!panel.classList.contains("open")),
+  );
+  el.querySelector("#pvPaletteClose").addEventListener("click", () =>
+    togglePanel(false),
+  );
   backdrop.addEventListener("click", () => togglePanel(false));
   pv.closePanel = () => togglePanel(false);
   pv.onKey = (e) => {
@@ -1859,8 +1898,11 @@ function pvRenderPalette() {
   const list = pv.bySubj[pv.subject];
   const okCount = list.filter((q) => !pvQuestionIssues(q).length).length;
   document.getElementById("pvPaletteSubject").textContent = pv.subject;
-  document.getElementById("pvOkText").textContent = `${okCount} / ${list.length}`;
-  document.getElementById("pvOkFill").style.width = list.length ? `${(okCount / list.length) * 100}%` : "0%";
+  document.getElementById("pvOkText").textContent =
+    `${okCount} / ${list.length}`;
+  document.getElementById("pvOkFill").style.width = list.length
+    ? `${(okCount / list.length) * 100}%`
+    : "0%";
   const grid = document.getElementById("pvPaletteGrid");
   grid.innerHTML = list
     .map(
@@ -1908,7 +1950,8 @@ function pvRenderQuestion() {
 
   const isFirst = pv.subjList.indexOf(pv.subject) === 0 && pv.index === 0;
   const isLast =
-    pv.subjList.indexOf(pv.subject) === pv.subjList.length - 1 && pv.index === list.length - 1;
+    pv.subjList.indexOf(pv.subject) === pv.subjList.length - 1 &&
+    pv.index === list.length - 1;
 
   card.innerHTML = `
     <div class="question-meta">
@@ -1943,6 +1986,201 @@ function pvRenderQuestion() {
 document.addEventListener("click", (e) => {
   if (e.target.closest("#previewTestBtn")) openTestPreview();
 });
+
+function printMarkingSchemeSummary(list) {
+  const combos = new Map();
+  list.forEach((q) => {
+    const key = `${q.question_type}|${q.positive_marks}|${q.negative_marks}`;
+    if (!combos.has(key)) combos.set(key, q);
+  });
+  return [...combos.values()]
+    .map(
+      (q) =>
+        `${q.question_type === "mcq" ? "MCQ" : "Integer"}: +${q.positive_marks} / -${q.negative_marks}`,
+    )
+    .join(" · ");
+}
+
+// Shared by both the admin's "Print / PDF" (full test) and the student's
+// "Print question paper" (after they've submitted). Builds a blank paper —
+// question + options only, no one's answers — followed by an answer key.
+// `questions` items need: subject, question_type, question_text, image_url,
+// options, positive_marks, negative_marks, correct_option, correct_integer_value.
+function buildPrintPaperHtml(questions, meta) {
+  const SUBJECT_ORDER = ["Physics", "Chemistry", "Mathematics", "Biology"];
+  const subjectRank = (name) => {
+    const idx = SUBJECT_ORDER.indexOf(name);
+    return idx === -1 ? SUBJECT_ORDER.length : idx;
+  };
+  const groups = {};
+  questions.forEach((q) => {
+    const key = q.subject || "Other";
+    (groups[key] = groups[key] || []).push(q);
+  });
+  const typeRank = (q) => (q.question_type === "mcq" ? 0 : 1);
+  const subjectNames = Object.keys(groups).sort(
+    (x, y) => subjectRank(x) - subjectRank(y) || x.localeCompare(y),
+  );
+  subjectNames.forEach((key) => {
+    groups[key] = groups[key]
+      .map((q, idx) => ({ q, idx }))
+      .sort((a, b) => typeRank(a.q) - typeRank(b.q) || a.idx - b.idx)
+      .map((x) => x.q);
+  });
+
+  // Continuous numbering across the whole paper so the answer key at the
+  // end can reference each question "in proper sequence" by that number.
+  let n = 0;
+  const answerKey = [];
+  const sectionsHtml = subjectNames
+    .map((subject) => {
+      const rows = groups[subject]
+        .map((q) => {
+          n += 1;
+          const ans =
+            q.question_type === "mcq"
+              ? q.correct_option || "—"
+              : (q.correct_integer_value ?? "—");
+          answerKey.push({ n, ans });
+          const body =
+            q.question_type === "mcq"
+              ? `<div class="print-options">${(q.options || [])
+                  .map(
+                    (o) =>
+                      `<div class="print-option"><span class="print-option-mark"></span>${escapeHtml(o.id)}. ${escapeHtml(o.text || "")}</div>`,
+                  )
+                  .join("")}</div>`
+              : `<div class="print-integer-line">Answer: __________</div>`;
+          return `
+        <div class="print-question">
+          <div class="print-question-head">Q${n}. <span class="print-marks">[+${q.positive_marks} / -${q.negative_marks}]</span></div>
+          <div class="print-question-text">${escapeHtml(q.question_text)}</div>
+          ${questionImageHtml(q.image_url)}
+          ${body}
+        </div>`;
+        })
+        .join("");
+      return `<div class="print-subject-section"><h3>${escapeHtml(subject)}</h3>${rows}</div>`;
+    })
+    .join("");
+
+  const answerKeyHtml = `
+    <div class="print-answer-key">
+      <h3>Answer Key</h3>
+      <div class="print-answer-grid">
+        ${answerKey.map((a) => `<div class="print-answer-cell"><b>${a.n}.</b> ${escapeHtml(String(a.ans))}</div>`).join("")}
+      </div>
+    </div>`;
+
+  const marking = printMarkingSchemeSummary(questions);
+
+  return `
+    <div class="print-promo">JEE Hustlers — practice smart, score high.</div>
+    <h1 class="print-title">${escapeHtml(meta.title || "Test")}</h1>
+    <div class="print-meta-row">
+      <span><b>Duration:</b> ${escapeHtml(String(meta.durationMinutes ?? "—"))} minutes</span>
+      <span><b>Syllabus:</b> ${escapeHtml(subjectNames.join(", "))}</span>
+      <span><b>Marking scheme:</b> ${escapeHtml(marking)}</span>
+    </div>
+    <hr>
+    ${sectionsHtml}
+    <div class="print-page-break"></div>
+    ${answerKeyHtml}
+  `;
+}
+
+// Renders the paper once, on screen, inside a closable preview — nothing is
+// sent to the printer until the student/admin explicitly clicks Download.
+function openPrintPreview(paperHtml, title) {
+  document.getElementById("printPreviewOverlay")?.remove();
+  const overlay = document.createElement("div");
+  overlay.id = "printPreviewOverlay";
+  overlay.innerHTML = `
+    <div class="print-preview-toolbar">
+      <span class="print-preview-label">📄 ${escapeHtml(title || "Question paper")}</span>
+      <div class="print-preview-actions">
+        <button type="button" class="btn btn-sm btn-primary" id="printDownloadBtn">⬇ Download as PDF</button>
+        <button type="button" class="btn btn-sm" id="printCloseBtn">✕ Close</button>
+      </div>
+    </div>
+    <div class="print-preview-scroll">
+      <div class="print-paper" id="printPaperArea">${paperHtml}</div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  document.body.classList.add("print-preview-open");
+  renderMath(overlay);
+
+  const close = () => {
+    overlay.remove();
+    document.body.classList.remove("print-preview-open");
+  };
+  overlay.querySelector("#printCloseBtn").addEventListener("click", close);
+  overlay.querySelector("#printDownloadBtn").addEventListener("click", () => {
+    window.print();
+  });
+}
+
+function openTestPrint() {
+  if (!adminQuestionsCache.length) {
+    toast("Add at least one question before printing the test.", "error");
+    return;
+  }
+  const paperHtml = buildPrintPaperHtml(adminQuestionsCache, {
+    title: currentTest?.title,
+    durationMinutes: currentTest?.duration_minutes,
+  });
+  openPrintPreview(paperHtml, currentTest?.title);
+}
+
+document.addEventListener("click", (e) => {
+  if (e.target.closest("#printTestBtn")) openTestPrint();
+});
+
+// Student-side: same blank paper + answer key, available once they've
+// submitted. Positive/negative marks come from get_test_questions (no
+// answers in it); correct answers come from the review the student already
+// has on their own report — never the student's own selected answers.
+async function openStudentTestPrint(report) {
+  const btn = document.getElementById("printPaperBtn");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Preparing…";
+  }
+  const { data: qData, error } = await sb.rpc("get_test_questions", {
+    p_attempt_id: report.attempt_id,
+  });
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = "🖨 Print question paper";
+  }
+  if (error || !qData?.length) {
+    toast("Couldn't prepare the question paper.", "error");
+    return;
+  }
+  const marksById = {};
+  qData.forEach((q) => {
+    marksById[q.id] = q;
+  });
+  const merged = (report.review || [])
+    .filter((r) => marksById[r.question_id])
+    .map((r) => ({
+      subject: r.subject,
+      question_type: r.question_type,
+      question_text: r.question_text,
+      image_url: r.image_url,
+      options: r.options,
+      correct_option: r.correct_option,
+      correct_integer_value: r.correct_integer_value,
+      positive_marks: marksById[r.question_id].positive_marks,
+      negative_marks: marksById[r.question_id].negative_marks,
+    }));
+  const paperHtml = buildPrintPaperHtml(merged, {
+    title: report.test_title,
+    durationMinutes: report.duration_minutes,
+  });
+  openPrintPreview(paperHtml, report.test_title);
+}
 
 function editQuestion(q) {
   if (!q) return;
@@ -2445,6 +2683,11 @@ function renderBeginInstructions() {
 
   document.getElementById("beginInstructions").innerHTML = `
     <div class="instruction-text"><strong>${escapeHtml(testTitle)}</strong> &nbsp;·&nbsp; ${escapeHtml(testCategory)} &nbsp;·&nbsp; Duration: ${durationMinutes} minutes</div>
+    ${
+      pendingIsPractice
+        ? `<div class="practice-notice">🔁 <strong>Practice re-attempt</strong> — this run is for your own revision only. It will not affect your rank, percentile, or appear on any leaderboard.</div>`
+        : ""
+    }
 
     <div class="instruction-section">
       <strong>1. General Instructions</strong>
@@ -2507,6 +2750,7 @@ function renderBeginInstructions() {
 }
 
 let previousAttemptInProgress = false;
+let pendingIsPractice = false;
 
 async function enterExamView() {
   // Reset everything to a clean slate — this view can be entered more than
@@ -2552,6 +2796,7 @@ async function enterExamView() {
     return;
   }
   pendingTestId = selectedTestId;
+  pendingIsPractice = qs("practice") === "1";
 
   // Look up the test and any existing attempt WITHOUT starting the exam —
   // start_attempt_by_test (which stamps the server-side started_at the countdown
@@ -2571,17 +2816,22 @@ async function enterExamView() {
         .select("id, status, disqualified_at, warning_count")
         .eq("user_id", session.user.id)
         .eq("test_id", selectedTestId)
+        .eq("is_practice", pendingIsPractice)
         .order("started_at", { ascending: false })
         .limit(1)
         .maybeSingle(),
     ]);
 
+  // A practice re-attempt is personal revision: it isn't bound by the
+  // test's publish/close window (the student already completed the real,
+  // scheduled attempt to unlock it in the first place).
   if (
     testMetaError ||
     !testMeta ||
     !testMeta.is_published ||
-    Date.now() < new Date(testMeta.available_from).getTime() ||
-    Date.now() >= new Date(testMeta.available_until).getTime()
+    (!pendingIsPractice &&
+      (Date.now() < new Date(testMeta.available_from).getTime() ||
+        Date.now() >= new Date(testMeta.available_until).getTime()))
   ) {
     showTerminal(
       "Test is not live",
@@ -2593,7 +2843,7 @@ async function enterExamView() {
     return;
   }
 
-  if (previousAttempt?.disqualified_at) {
+  if (!pendingIsPractice && previousAttempt?.disqualified_at) {
     showTerminal(
       "Test access removed",
       "An administrator has removed you from this test. Contact your admin if you believe this is a mistake.",
@@ -2602,10 +2852,13 @@ async function enterExamView() {
     );
     return;
   }
-  if (["submitted", "auto_submitted"].includes(previousAttempt?.status)) {
+  if (
+    !pendingIsPractice &&
+    ["submitted", "auto_submitted"].includes(previousAttempt?.status)
+  ) {
     showTerminal(
       "Test already attempted",
-      "You have already submitted this test. You cannot start it again, but you can view your report.",
+      "You have already submitted this test. You cannot start it again, but you can view your report or start a practice re-attempt from it.",
       `#/result?attempt=${previousAttempt.id}`,
       "View your report",
     );
@@ -2619,7 +2872,7 @@ async function enterExamView() {
   previousAttemptInProgress = previousAttempt?.status === "in_progress";
 
   document.getElementById("examTitle").innerHTML =
-    `${escapeHtml(testTitle)} ${categoryBadge(testCategory)}`;
+    `${escapeHtml(testTitle)} ${categoryBadge(testCategory)}${pendingIsPractice ? ' <span class="practice-badge">🔁 Practice</span>' : ""}`;
   document.getElementById("examCandidate").textContent = candidateName;
 
   document.getElementById("loadingScreen").style.display = "none";
@@ -2721,8 +2974,12 @@ function renderSubjectTabs() {
 
 function updatePaletteSummary(list) {
   const count = (fn) => list.filter(fn).length;
-  const answered = count((q) => q.status === "answered" || q.status === "answered_marked");
-  const marked = count((q) => q.status === "marked" || q.status === "answered_marked");
+  const answered = count(
+    (q) => q.status === "answered" || q.status === "answered_marked",
+  );
+  const marked = count(
+    (q) => q.status === "marked" || q.status === "answered_marked",
+  );
   const notVisited = count((q) => q.status === "not_visited");
   const notAnswered = count((q) => q.status === "not_answered");
   const set = (id, v) => {
@@ -2736,7 +2993,10 @@ function updatePaletteSummary(list) {
   set("palCountAnswered", answered);
   set("palCountMarked", marked);
   const fill = document.getElementById("paletteProgressFill");
-  if (fill) fill.style.width = list.length ? `${(answered / list.length) * 100}%` : "0%";
+  if (fill)
+    fill.style.width = list.length
+      ? `${(answered / list.length) * 100}%`
+      : "0%";
 }
 
 function renderPalette() {
@@ -3074,9 +3334,9 @@ async function onBegin() {
 
   // This is the moment the exam clock actually starts — start_attempt
   // stamps started_at server-side right now, not back when the page loaded.
-  const { data, error } = await sb.rpc("start_attempt_by_test", {
-    p_test_id: pendingTestId,
-  });
+  const { data, error } = pendingIsPractice
+    ? await sb.rpc("start_practice_attempt", { p_test_id: pendingTestId })
+    : await sb.rpc("start_attempt_by_test", { p_test_id: pendingTestId });
 
   if (error) {
     closeModal("beginModal");
@@ -3564,7 +3824,9 @@ async function enterResultView() {
   // percentile and the leaderboard stay locked until the admin declares
   // results — get_full_report simply returns null/empty for those until
   // then, rather than erroring, so `declared` is derived from that.
-  const declared = report.rank !== null && report.rank !== undefined;
+  const isPractice = !!report.is_practice;
+  const declared =
+    !isPractice && report.rank !== null && report.rank !== undefined;
   const subjectRows = report.subject_rows || [];
   const review = report.review || [];
   const board = report.board || [];
@@ -3587,18 +3849,39 @@ async function enterResultView() {
       <p class="text-muted" style="font-size:13px;">
         ${viewingSomeoneElse ? `Top-3 public report · ${escapeHtml(report.full_name || "Student")} · ` : ""}Submitted ${formatDateTime(report.submitted_at)}
       </p>
+      ${
+        isPractice
+          ? `<div class="practice-notice" style="margin-top:10px;">🔁 <strong>Practice re-attempt</strong> — for your own revision only. Not counted for rank, percentile, or the leaderboard.</div>`
+          : ""
+      }
+      ${
+        report.is_owner &&
+        ["submitted", "auto_submitted"].includes(report.status)
+          ? `<div class="report-actions-row">
+              ${
+                !isPractice
+                  ? `<a class="btn btn-sm btn-secondary" href="#/exam?test=${encodeURIComponent(report.test_id)}&practice=1">🔁 Reattempt this test</a>`
+                  : ""
+              }
+              <button type="button" class="btn btn-sm" id="printPaperBtn">🖨 Print question paper</button>
+            </div>`
+          : ""
+      }
     </div>
 
     ${
-      !declared
+      !isPractice && !declared
         ? `<div class="locked-banner">Your score is available. Rank and percentile will be announced when the test is over.</div>`
         : ""
     }
 
     <div class="stat-grid">
       <div class="stat-card"><div class="val">${report.total_score} / ${totalMax}</div><div class="lbl">Score</div></div>
-      <div class="stat-card"><div class="val">${declared ? `${medalFor(report.rank)}#${report.rank}` : "🔒"}</div><div class="lbl">Rank${declared ? " of " + report.total_participants : ""}</div></div>
-      <div class="stat-card"><div class="val">${declared ? report.percentile + "%" : "🔒"}</div><div class="lbl">Percentile</div></div>
+<div class="stat-card">
+  <div class="val">${isPractice ? "—" : declared ? `${medalFor(report.rank)}#${report.rank}` : "🔒"}</div>
+  <div class="lbl">Rank</div>
+</div>
+      <div class="stat-card"><div class="val">${isPractice ? "—" : declared ? report.percentile + "%" : "🔒"}</div><div class="lbl">Percentile</div></div>
       <div class="stat-card"><div class="val">${formatDurationPrecise(timeTakenSec)}</div><div class="lbl">Time taken</div></div>
     </div>
 
@@ -3643,11 +3926,13 @@ async function enterResultView() {
     <div class="card">
       <h2 style="font-size:16px;">Leaderboard</h2>
       ${
-        !declared
-          ? `<div class="empty-state">Rank and percentile will be announced when the test gets over.</div>`
-          : board.length === 0
-            ? `<div class="empty-state">No submissions yet.</div>`
-            : `
+        isPractice
+          ? `<div class="empty-state">Practice re-attempts don't appear on the leaderboard. Your real attempt's rank and percentile are on that report.</div>`
+          : !declared
+            ? `<div class="empty-state">Rank and percentile will be announced when the test gets over.</div>`
+            : board.length === 0
+              ? `<div class="empty-state">No submissions yet.</div>`
+              : `
       <div class="table-scroll">
         <table class="report-table">
           <thead><tr><th>Rank</th><th>Student</th><th>Score</th><th>Percentile</th></tr></thead>
@@ -3681,6 +3966,10 @@ async function enterResultView() {
   `;
   renderMath(content);
   animateRadialProgress(content);
+
+  document.getElementById("printPaperBtn")?.addEventListener("click", () => {
+    openStudentTestPrint(report);
+  });
 }
 
 /* =========================================================================
@@ -4910,7 +5199,7 @@ function setupThemeDrag() {
 
     btn.style.left = `${left}px`;
     btn.style.top = `${top}px`;
-  }); 
+  });
 }
 
 /* =========================================================
@@ -4923,4 +5212,4 @@ function setupTheme() {
   applyTheme(savedTheme);
 
   setupThemeDrag();
-} 
+}
