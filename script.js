@@ -645,7 +645,7 @@ function testCardCta(entry) {
     return `<a class="btn btn-sm btn-practice" href="#/exam?test=${encodeURIComponent(entry.id)}&practice=1">Resume practice</a>`;
   }
   if (a && a.status !== "in_progress") {
-    return `<a class="btn btn-sm" href="#/result?attempt=${a.id}">View Report</a> <a class="btn btn-sm btn-secondary" href="#/exam?test=${encodeURIComponent(entry.id)}&practice=1">🔁 Reattempt</a>`;
+    return `<a class="btn btn-sm" href="#/result?attempt=${a.id}">View Report</a> <a class="btn btn-sm btn-secondary" href="#/exam?test=${encodeURIComponent(entry.id)}&practice=1">🔁 Reattempt</a> <button type="button" class="btn btn-sm btn-print" data-print-attempt="${a.id}" title="Preview the question paper with answer key and download it as a PDF">📄 Get Questions PDF</button>`;
   }
   if (entry.windowState === "past") {
     return `<a class="btn btn-sm" href="#/test-details?test=${encodeURIComponent(entry.id)}">View details</a>`;
@@ -973,36 +973,24 @@ async function renderHomeStats(merged, attempts) {
   const el = document.getElementById("homeStats");
   if (!el) return;
 
-  const totalTests = merged.length;
-  const attemptedCount = new Set(attempts.map((a) => a.test_id)).size;
+  // Re-attempts are personal practice: they never count towards totals.
+  const totalTests = merged.filter((t) => !t.is_practice).length;
+  const mainAttempts = attempts.filter((a) => !a.is_practice);
+  const attemptedCount = new Set(mainAttempts.map((a) => a.test_id)).size;
 
-  const submittedAttempts = attempts
-    .filter((a) => a.status !== "in_progress")
+  const submittedAttempts = mainAttempts
+    .filter((a) => a.status !== "in_progress" && !a.disqualified_at)
     .sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at))
     .slice(0, 25);
 
+  // Same source as the Analytics page (main attempts only, re-attempts and
+  // disqualified attempts excluded), so both screens always agree.
   let avgScoreLabel = "—";
   if (submittedAttempts.length) {
-    const reports = await Promise.all(
-      submittedAttempts.map((a) =>
-        sb.rpc("get_full_report", { p_attempt_id: a.id }).then(
-          (r) => r.data,
-          () => null,
-        ),
-      ),
-    );
-    let scoreSum = 0;
-    let maxSum = 0;
-    reports.forEach((report) => {
-      if (!report || !report.subject_rows) return;
-      const max = report.subject_rows.reduce((s, r) => s + Number(r.total), 0);
-      if (max > 0) {
-        scoreSum += Number(report.total_score) || 0;
-        maxSum += max;
-      }
-    });
-    if (maxSum > 0)
-      avgScoreLabel = `${((scoreSum / maxSum) * 100).toFixed(1)}%`;
+    const { data: analytics } = await sb.rpc("get_student_analytics");
+    const completed = Number(analytics?.summary?.completed_tests || 0);
+    const avg = Number(analytics?.summary?.average_score);
+    if (completed > 0 && Number.isFinite(avg)) avgScoreLabel = `${avg.toFixed(1)}%`;
   }
 
   el.innerHTML = `
@@ -1034,7 +1022,7 @@ async function enterHomeView() {
       fetchTestsCatalog(),
       sb
         .from("test_attempts")
-        .select("id, test_id, status, total_score, started_at, submitted_at")
+        .select("id, test_id, status, total_score, started_at, submitted_at, is_practice, disqualified_at")
         .eq("user_id", myProfile.id),
     ]);
 
@@ -1073,7 +1061,8 @@ async function loadAdminTests() {
       sb
         .from("test_attempts")
         .select("id", { count: "exact", head: true })
-        .eq("test_id", t.id),
+        .eq("test_id", t.id)
+        .eq("is_practice", false),
     ),
   );
 
@@ -1315,7 +1304,6 @@ function setupAdminTestListeners() {
         showPostCreateSections();
         await loadQuestions();
         await loadStudentResults();
-        await loadLeaderboard();
         await loadReports();
       }
     });
@@ -1466,10 +1454,12 @@ async function enterAdminTestView() {
   document.getElementById("saveDetailsBtn").textContent = "Create test";
   document.getElementById("shareCard").style.display = "none";
   document.getElementById("questionsCard").style.display = "none";
-  document.getElementById("questionListCard").style.display = "none";
   document.getElementById("studentResultsCard").style.display = "none";
-  document.getElementById("leaderboardCard").style.display = "none";
   document.getElementById("reportsCard").style.display = "none";
+  document.getElementById("adminSummary").style.display = "none";
+  document.getElementById("adminJump").style.display = "none";
+  adminReports = [];
+  adminResultsRows = [];
   document.getElementById("mcqFields").style.display = "block";
   document.getElementById("integerFields").style.display = "none";
   document.getElementById("typeInput").value = "mcq";
@@ -1522,18 +1512,18 @@ async function loadExistingTest(testId) {
   showPostCreateSections();
   await loadQuestions();
   await loadStudentResults();
-  await loadLeaderboard();
   await loadReports();
 }
 
 function showPostCreateSections() {
   document.getElementById("shareCard").style.display = "block";
   document.getElementById("questionsCard").style.display = "block";
-  document.getElementById("questionListCard").style.display = "block";
   document.getElementById("studentResultsCard").style.display = "block";
-  document.getElementById("leaderboardCard").style.display = "block";
   document.getElementById("reportsCard").style.display = "block";
+  document.getElementById("adminSummary").style.display = "grid";
+  document.getElementById("adminJump").style.display = "flex";
   renderShareCard();
+  renderAdminSummary();
 }
 
 function renderShareCard() {
@@ -1616,98 +1606,48 @@ async function loadQuestions() {
     .select("*")
     .eq("test_id", currentTest.id)
     .order("question_order");
-  const list = document.getElementById("questionsList");
-  const countTag = document.getElementById("questionCountTag");
   if (error) {
-    list.innerHTML = `<div class="error-box">${escapeHtml(friendlyError(error))}</div>`;
+    toast(friendlyError(error), "error");
     return;
   }
-
   questionCounter = data.length;
   adminQuestionsCache = data;
-  countTag.textContent = `${data.length} question${data.length === 1 ? "" : "s"}`;
-
-  if (data.length === 0) {
-    list.innerHTML = `<div class="empty-state">No questions yet — add your first one above.</div>`;
-    return;
+  const countTag = document.getElementById("questionCountTag");
+  if (countTag) {
+    const marks = data.reduce((s, q) => s + Number(q.positive_marks || 0), 0);
+    const mcq = data.filter((q) => q.question_type === "mcq").length;
+    countTag.textContent = data.length
+      ? `${data.length} question${data.length === 1 ? "" : "s"} · ${mcq} MCQ · ${data.length - mcq} Integer · ${marks} marks`
+      : "No questions yet";
   }
-
-  // Group by subject (Physics, Chemistry, Mathematics, Biology first, then any
-  // custom subjects alphabetically); keep the admin's own order within a subject.
-  const SUBJECT_ORDER = ["Physics", "Chemistry", "Mathematics", "Biology"];
-  const subjectRank = (name) => {
-    const idx = SUBJECT_ORDER.indexOf(name);
-    return idx === -1 ? SUBJECT_ORDER.length : idx;
-  };
-  const groups = {};
-  data.forEach((q) => {
-    const key = q.subject || "Other";
-    (groups[key] = groups[key] || []).push(q);
-  });
-  // Inside each subject: MCQs first, then Integer-type; original order kept within each type.
-  const typeRank = (q) => (q.question_type === "mcq" ? 0 : 1);
-  Object.keys(groups).forEach((key) => {
-    groups[key] = groups[key]
-      .map((q, idx) => ({ q, idx }))
-      .sort((x, y) => typeRank(x.q) - typeRank(y.q) || x.idx - y.idx)
-      .map((x) => x.q);
-  });
-  const subjectNames = Object.keys(groups).sort(
-    (x, y) => subjectRank(x) - subjectRank(y) || x.localeCompare(y),
-  );
-
-  list.innerHTML = subjectNames
-    .map((subject) => {
-      const items = groups[subject];
-      const totalMarks = items.reduce(
-        (sum, q) => sum + Number(q.positive_marks || 0),
-        0,
-      );
-      const mcqCount = items.filter((q) => q.question_type === "mcq").length;
-      const intCount = items.length - mcqCount;
-      const rows = items
-        .map(
-          (q, i) => `${
-            i === 0 && mcqCount
-              ? `<div class="question-type-label">MCQ · ${mcqCount}</div>`
-              : ""
-          }${
-            i === mcqCount && intCount
-              ? `<div class="question-type-label">Integer · ${intCount}</div>`
-              : ""
-          }
-    <div class="list-row">
-      <div class="list-row-main">
-        <div class="list-row-title">Q${i + 1}. ${escapeHtml(q.question_text.slice(0, 90))}${q.question_text.length > 90 ? "…" : ""}</div>
-        <div class="list-row-meta">${q.question_type === "mcq" ? "MCQ" : "Integer"} · +${q.positive_marks} / -${q.negative_marks}${q.explanation ? " · has explanation" : ""}</div>
-      </div>
-      <div class="list-row-actions">
-        <button class="btn btn-sm js-edit-question" data-id="${q.id}">Edit</button>
-        <button class="btn btn-sm btn-danger js-delete-question" data-id="${q.id}">Delete</button>
-      </div>
-    </div>`,
-        )
-        .join("");
-      return `
-    <section class="question-subject-group" style="--subject-color:${subjectColor(subject)}">
-      <div class="question-subject-header" style="--subject-color:${subjectColor(subject)}">
-        <span class="question-subject-name">${subjectDot(subject)}${escapeHtml(subject)}</span>
-        <span class="question-subject-stats">${items.length} question${items.length === 1 ? "" : "s"} · ${mcqCount} MCQ · ${intCount} Integer · ${totalMarks} marks</span>
-      </div>
-      <div class="question-subject-rows">${rows}</div>
-    </section>`;
-    })
-    .join("");
-
-  list.querySelectorAll(".js-delete-question").forEach((btn) => {
-    btn.addEventListener("click", () => deleteQuestion(btn.dataset.id));
-  });
-  list.querySelectorAll(".js-edit-question").forEach((btn) => {
-    btn.addEventListener("click", () =>
-      editQuestion((data || []).find((q) => q.id === btn.dataset.id)),
-    );
-  });
+  renderAdminSummary();
 }
+
+// Top-of-page snapshot for the admin: what this test contains and how it is doing.
+let adminReports = [];
+function renderAdminSummary() {
+  const el = document.getElementById("adminSummary");
+  if (!el || !currentTest) return;
+  const marks = adminQuestionsCache.reduce(
+    (s, q) => s + Number(q.positive_marks || 0),
+    0,
+  );
+  const tile = (label, value, sub = "") =>
+    `<div class="insight-tile"><span>${label}</span><strong>${value}</strong>${sub ? `<small>${sub}</small>` : ""}</div>`;
+  el.innerHTML =
+    tile("Questions", adminQuestionsCache.length, `${marks} total marks`) +
+    tile("Duration", `${currentTest.duration_minutes || "—"} min`, escapeHtml(currentTest.category || "")) +
+    tile("Submissions", adminResultsRows.length, currentTest.result_release_at ? "Results declared" : "Results pending") +
+    tile("Reports", adminReports.length, adminReports.length ? "Need a look" : "All clear");
+}
+
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("#adminJump [data-jump]");
+  if (!btn) return;
+  document
+    .getElementById(btn.dataset.jump)
+    ?.scrollIntoView({ behavior: "smooth", block: "start" });
+});
 
 /* =========================================================================
    ADMIN — test preview (mirrors the real exam interface, read-only)
@@ -1735,20 +1675,17 @@ function pvQuestionIssues(q) {
   return issues;
 }
 
-function openTestPreview() {
-  if (!adminQuestionsCache.length) {
-    toast("Add at least one question to preview the test.", "error");
-    return;
-  }
+// Subjects in the usual order, and inside each subject MCQs first, then Integer type.
+function pvGroupQuestions() {
+  const ORDER = ["Physics", "Chemistry", "Mathematics", "Biology"];
+  const rank = (s) => {
+    const i = ORDER.indexOf(s);
+    return i === -1 ? ORDER.length : i;
+  };
   const bySubj = {};
-  const subjList = [];
   adminQuestionsCache.forEach((q) => {
     const key = q.subject || "Other";
-    if (!bySubj[key]) {
-      bySubj[key] = [];
-      subjList.push(key);
-    }
-    bySubj[key].push(q);
+    (bySubj[key] = bySubj[key] || []).push(q);
   });
   Object.keys(bySubj).forEach((k) => {
     bySubj[k] = bySubj[k]
@@ -1760,7 +1697,31 @@ function openTestPreview() {
       )
       .map((x) => x.q);
   });
-  pv = { bySubj, subjList, subject: subjList[0], index: 0, showAnswers: true };
+  const subjList = Object.keys(bySubj).sort(
+    (x, y) => rank(x) - rank(y) || x.localeCompare(y),
+  );
+  return { bySubj, subjList };
+}
+
+// focusQuestionId lets a reported question open the preview right on it.
+function openTestPreview(focusQuestionId = null) {
+  if (!adminQuestionsCache.length) {
+    toast("Add at least one question to preview the test.", "error");
+    return;
+  }
+  document.getElementById("adminPreviewOverlay")?.remove();
+  const groups = pvGroupQuestions();
+  pv = { ...groups, subject: groups.subjList[0], index: 0, showAnswers: true };
+  if (focusQuestionId) {
+    for (const s of groups.subjList) {
+      const i = groups.bySubj[s].findIndex((q) => q.id === focusQuestionId);
+      if (i !== -1) {
+        pv.subject = s;
+        pv.index = i;
+        break;
+      }
+    }
+  }
 
   const el = document.createElement("div");
   el.className = "admin-preview-overlay";
@@ -1769,7 +1730,7 @@ function openTestPreview() {
     <div class="admin-preview-banner">
       <div class="pv-banner-left">
         <span class="pv-badge">👁 Admin preview</span>
-        <span class="pv-banner-note">Read-only · nothing is saved · students are not affected</span>
+        <span class="pv-banner-note">Exactly what students see · edit or remove questions right here</span>
       </div>
       <div class="pv-banner-right">
         <label class="pv-switch" title="Show or hide correct answers and explanations">
@@ -1784,7 +1745,7 @@ function openTestPreview() {
       <div class="exam-topbar-inner">
         <div>
           <div class="exam-title">${escapeHtml(currentTest?.title || "Test")}</div>
-          <div class="exam-candidate">Admin preview · ${adminQuestionsCache.length} questions</div>
+          <div class="exam-candidate" id="pvCount">Admin preview · ${adminQuestionsCache.length} questions</div>
         </div>
         <div class="exam-timer">${escapeHtml(String(currentTest?.duration_minutes ?? "--"))} min</div>
       </div>
@@ -1851,6 +1812,43 @@ function openTestPreview() {
   pvRenderQuestion();
 }
 
+async function pvRemoveQuestion(q) {
+  if (!pv) return;
+  const attempts = adminResultsRows.length;
+  const warn = attempts
+    ? `\n\n${attempts} student${attempts === 1 ? " has" : "s have"} already submitted this test. Their stored scores stay as they are, but this question will disappear from their review.`
+    : "";
+  if (!confirm(`Remove this question from the test? This can't be undone.${warn}`)) return;
+  const { error } = await sb.from("questions").delete().eq("id", q.id);
+  if (error) {
+    toast(friendlyError(error), "error");
+    return;
+  }
+  toast("Question removed", "success");
+  const keepSubject = pv.subject;
+  const keepIndex = pv.index;
+  await Promise.all([loadQuestions(), loadReports()]);
+  if (!adminQuestionsCache.length) {
+    closeTestPreview();
+    return;
+  }
+  const groups = pvGroupQuestions();
+  pv.bySubj = groups.bySubj;
+  pv.subjList = groups.subjList;
+  if (groups.bySubj[keepSubject]) {
+    pv.subject = keepSubject;
+    pv.index = Math.min(keepIndex, groups.bySubj[keepSubject].length - 1);
+  } else {
+    pv.subject = groups.subjList[0];
+    pv.index = 0;
+  }
+  const count = document.getElementById("pvCount");
+  if (count)
+    count.textContent = `Admin preview · ${adminQuestionsCache.length} questions`;
+  pvRenderTabs();
+  pvRenderQuestion();
+}
+
 function closeTestPreview() {
   if (!pv) return;
   document.removeEventListener("keydown", pv.onKey);
@@ -1907,7 +1905,7 @@ function pvRenderPalette() {
   grid.innerHTML = list
     .map(
       (q, i) =>
-        `<button type="button" class="palette-btn ${pvQuestionIssues(q).length ? "not_answered" : "answered"} ${i === pv.index ? "current" : ""}" data-i="${i}">${i + 1}</button>`,
+        `<button type="button" class="palette-btn ${pvQuestionIssues(q).length ? "not_answered" : "answered"} ${i === pv.index ? "current" : ""} ${adminReports.some((r) => r.question_id === q.id) ? "pv-reported" : ""}" data-i="${i}" title="${q.question_type === "mcq" ? "MCQ" : "Integer"}${adminReports.some((r) => r.question_id === q.id) ? " · reported" : ""}">${i + 1}</button>`,
     )
     .join("");
   grid.querySelectorAll("button").forEach((btn) =>
@@ -1925,6 +1923,7 @@ function pvRenderQuestion() {
   const card = document.getElementById("pvQuestionCard");
   card.style.borderLeft = `4px solid ${subjectColor(q.subject)}`;
   const issues = pvQuestionIssues(q);
+  const qReports = adminReports.filter((r) => r.question_id === q.id);
   const show = pv.showAnswers;
 
   let bodyHtml;
@@ -1955,17 +1954,28 @@ function pvRenderQuestion() {
 
   card.innerHTML = `
     <div class="question-meta">
-      <span class="question-number-badge">${subjectDot(q.subject)}${escapeHtml(q.subject)} · Question ${pv.index + 1}</span>
+      <span class="question-number-badge">${subjectDot(q.subject)}${escapeHtml(q.subject)} · ${q.question_type === "mcq" ? "MCQ" : "Integer"} · Question ${pv.index + 1}</span>
       <span class="question-marks">+${q.positive_marks} / -${q.negative_marks}</span>
     </div>
     ${issues.length ? `<div class="pv-issues">⚠ ${issues.map(escapeHtml).join(" · ")}</div>` : ""}
+    ${
+      qReports.length
+        ? `<div class="pv-reports"><strong>⚑ ${qReports.length} student report${qReports.length === 1 ? "" : "s"} on this question</strong><ul>${qReports
+            .map(
+              (r) =>
+                `<li>${escapeHtml(r.reason)}${r.details ? ` — ${escapeHtml(r.details)}` : ""} <small>· ${escapeHtml(r.profiles?.full_name || "Student")}</small></li>`,
+            )
+            .join("")}</ul></div>`
+        : ""
+    }
     ${questionImageHtml(q.image_url)}
     <div class="question-text">${escapeHtml(q.question_text)}</div>
     ${bodyHtml}
     ${show && q.explanation ? `<div class="pv-explanation"><strong>Explanation</strong><div>${escapeHtml(q.explanation)}</div></div>` : ""}
     <div class="exam-actions">
       <div class="exam-actions-left">
-        <button class="btn js-pv-edit">Edit this question</button>
+        <button class="btn js-pv-edit">✏️ Edit</button>
+        <button class="btn btn-danger js-pv-remove">🗑 Remove</button>
       </div>
       <div class="exam-actions-right">
         <button class="btn" id="pvPrev" ${isFirst ? "disabled" : ""}>← Previous</button>
@@ -1978,6 +1988,9 @@ function pvRenderQuestion() {
     closeTestPreview();
     editQuestion(q);
   });
+  card
+    .querySelector(".js-pv-remove")
+    .addEventListener("click", () => pvRemoveQuestion(q));
   renderMath(card);
   pvRenderPalette();
   document.getElementById("adminPreviewOverlay").scrollTo({ top: 0 });
@@ -2099,7 +2112,7 @@ function openPrintPreview(paperHtml, title) {
     <div class="print-preview-toolbar">
       <span class="print-preview-label">📄 ${escapeHtml(title || "Question paper")}</span>
       <div class="print-preview-actions">
-        <button type="button" class="btn btn-sm btn-primary" id="printDownloadBtn">⬇ Download as PDF</button>
+        <button type="button" class="btn btn-sm btn-primary" id="printDownloadBtn">⬇ Download now</button>
         <button type="button" class="btn btn-sm" id="printCloseBtn">✕ Close</button>
       </div>
     </div>
@@ -2116,9 +2129,69 @@ function openPrintPreview(paperHtml, title) {
     document.body.classList.remove("print-preview-open");
   };
   overlay.querySelector("#printCloseBtn").addEventListener("click", close);
-  overlay.querySelector("#printDownloadBtn").addEventListener("click", () => {
+  overlay
+    .querySelector("#printDownloadBtn")
+    .addEventListener("click", (e) => downloadPaperPdf(title, e.currentTarget));
+}
+
+// One click, one file: renders the previewed paper to a real PDF and saves it
+// straight to the user's device — no print dialog. The paper is cloned into an
+// off-screen A4-width box first so the file looks the same in light/dark mode
+// and on phones. Falls back to the browser print dialog only if the PDF
+// library could not be loaded.
+async function downloadPaperPdf(title, button) {
+  const src = document.getElementById("printPaperArea");
+  if (!src) return;
+  if (typeof window.html2pdf !== "function") {
+    toast("PDF engine unavailable — opening the print dialog instead. Choose “Save as PDF”.", "error");
     window.print();
-  });
+    return;
+  }
+  const original = button ? button.innerHTML : "";
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Preparing PDF…";
+  }
+  const host = document.createElement("div");
+  host.className = "pdf-export-host";
+  const clone = src.cloneNode(true);
+  clone.removeAttribute("id");
+  clone.classList.add("pdf-export-paper");
+  host.appendChild(clone);
+  document.body.appendChild(host);
+  const slug =
+    String(title || "question-paper")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "question-paper";
+  try {
+    await window
+      .html2pdf()
+      .set({
+        margin: [10, 10, 12, 10],
+        filename: `${slug}-questions.pdf`,
+        image: { type: "jpeg", quality: 0.96 },
+        html2canvas: { scale: 2, useCORS: true, backgroundColor: "#ffffff", scrollY: 0 },
+        jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+        pagebreak: {
+          mode: ["css", "legacy"],
+          avoid: [".print-question", ".print-answer-cell"],
+          before: ".print-page-break",
+        },
+      })
+      .from(clone)
+      .save();
+    toast("Your PDF has been downloaded", "success");
+  } catch (err) {
+    console.error("PDF export failed:", err);
+    toast("Couldn't create the PDF. Please try again.", "error");
+  } finally {
+    host.remove();
+    if (button) {
+      button.disabled = false;
+      button.innerHTML = original;
+    }
+  }
 }
 
 function openTestPrint() {
@@ -2137,32 +2210,40 @@ document.addEventListener("click", (e) => {
   if (e.target.closest("#printTestBtn")) openTestPrint();
 });
 
-// Student-side: same blank paper + answer key, available once they've
-// submitted. Positive/negative marks come from get_test_questions (no
-// answers in it); correct answers come from the review the student already
-// has on their own report — never the student's own selected answers.
-async function openStudentTestPrint(report) {
-  const btn = document.getElementById("printPaperBtn");
-  if (btn) {
-    btn.disabled = true;
-    btn.textContent = "Preparing…";
+// Student-side: blank paper + answer key for a submitted test. Triggered from
+// the "Print PDF" button on the dashboard / tests card, never from the report.
+// Positive/negative marks come from get_test_questions (no answers in it);
+// correct answers come from the student's own review — never their selections.
+async function printAttemptPaper(attemptId, button) {
+  const idle = button ? button.innerHTML : "";
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Preparing…";
   }
-  const { data: qData, error } = await sb.rpc("get_test_questions", {
-    p_attempt_id: report.attempt_id,
-  });
-  if (btn) {
-    btn.disabled = false;
-    btn.textContent = "🖨 Print question paper";
-  }
-  if (error || !qData?.length) {
+  const restore = () => {
+    if (button) {
+      button.disabled = false;
+      button.innerHTML = idle;
+    }
+  };
+  const [{ data: qData, error: qErr }, { data: review, error: rErr }] =
+    await Promise.all([
+      sb.rpc("get_test_questions", { p_attempt_id: attemptId }),
+      sb.rpc("get_answer_review", { p_attempt_id: attemptId }),
+    ]);
+  restore();
+  if (qErr || rErr || !qData?.length || !review?.length) {
     toast("Couldn't prepare the question paper.", "error");
     return;
   }
+  const entry = (testsCatalogCache || []).find(
+    (t) => t.myAttempt && t.myAttempt.id === attemptId,
+  );
   const marksById = {};
   qData.forEach((q) => {
     marksById[q.id] = q;
   });
-  const merged = (report.review || [])
+  const merged = review
     .filter((r) => marksById[r.question_id])
     .map((r) => ({
       subject: r.subject,
@@ -2175,12 +2256,20 @@ async function openStudentTestPrint(report) {
       positive_marks: marksById[r.question_id].positive_marks,
       negative_marks: marksById[r.question_id].negative_marks,
     }));
-  const paperHtml = buildPrintPaperHtml(merged, {
-    title: report.test_title,
-    durationMinutes: report.duration_minutes,
-  });
-  openPrintPreview(paperHtml, report.test_title);
+  const title = entry?.title || "Question paper";
+  openPrintPreview(
+    buildPrintPaperHtml(merged, {
+      title,
+      durationMinutes: entry?.duration_minutes,
+    }),
+    title,
+  );
 }
+
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-print-attempt]");
+  if (btn) printAttemptPaper(btn.dataset.printAttempt, btn);
+});
 
 function editQuestion(q) {
   if (!q) return;
@@ -2216,17 +2305,6 @@ function editQuestion(q) {
     .scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-async function deleteQuestion(id) {
-  if (!confirm("Delete this question? This can't be undone.")) return;
-  const { error } = await sb.from("questions").delete().eq("id", id);
-  if (error) {
-    toast(friendlyError(error), "error");
-    return;
-  }
-  toast("Question deleted");
-  await loadQuestions();
-}
-
 function medalFor(rank) {
   return rank === 1 ? "🥇" : rank === 2 ? "🥈" : rank === 3 ? "🥉" : "";
 }
@@ -2241,10 +2319,278 @@ function rankRowClass(rank) {
         : "";
 }
 
+/* =========================================================================
+   ADMIN — Student results with time analysis (cheat-spotting aid)
+   ========================================================================= */
+let adminResultsRows = [];
+let adminResultsFlags = new Map();
+let adminResultsStats = null;
+const adminResultsView = { q: "", filter: "all", sort: "rank" };
+const adminExpandedRows = new Set();
+
+/* Heuristic only — it surfaces attempts worth a closer look. It never
+   disqualifies anyone by itself; the admin always makes the call. */
+function analyseTimeFlags(rows) {
+  const flags = new Map();
+  const eligible = rows.filter(
+    (r) => !r.disqualified_at && chNum(r.total_time_seconds) > 0,
+  );
+  const stats = {
+    n: eligible.length,
+    ready: eligible.length >= 3,
+    medianTime: 0,
+    medianScore: 0,
+    subjectMedians: {},
+  };
+  if (!eligible.length) return { flags, stats };
+
+  const times = eligible.map((r) => chNum(r.total_time_seconds));
+  const scores = eligible.map((r) => chNum(r.total_score));
+  stats.medianTime = chMedian(times);
+  stats.medianScore = chMedian(scores);
+  const bySubject = {};
+  eligible.forEach((r) =>
+    (r.subject_times || []).forEach((s) => {
+      (bySubject[s.subject] = bySubject[s.subject] || []).push(chNum(s.seconds));
+    }),
+  );
+  Object.keys(bySubject).forEach((k) => {
+    stats.subjectMedians[k] = chMedian(bySubject[k]);
+  });
+  const p75Score = chQuantile(scores, 0.75);
+  const p25Time = chQuantile(times, 0.25);
+
+  eligible.forEach((r) => {
+    const t = chNum(r.total_time_seconds);
+    const sc = chNum(r.total_score);
+    const answered = chNum(r.correct_count) + chNum(r.wrong_count);
+    const acc = answered ? chNum(r.correct_count) / answered : 0;
+    const reasons = [];
+    let level = null;
+
+    if (stats.ready && sc > 0 && sc >= stats.medianScore && t < stats.medianTime * 0.4) {
+      reasons.push(
+        `Finished in ${Math.round((t / stats.medianTime) * 100)}% of the median time (${chMinutesLabel(stats.medianTime)}) with an above-median score.`,
+      );
+      level = "high";
+    } else if (eligible.length >= 4 && sc > 0 && sc >= p75Score && t <= p25Time) {
+      reasons.push("Top-quartile score achieved in bottom-quartile time.");
+      level = "med";
+    }
+    if (answered >= 10 && t / answered < 15 && acc >= 0.8) {
+      reasons.push(
+        `Only ${Math.round(t / answered)}s per answered question at ${Math.round(acc * 100)}% accuracy.`,
+      );
+      level = "high";
+    }
+    if (reasons.length) flags.set(r.attempt_id, { level, reasons });
+  });
+  return { flags, stats };
+}
+
+function resultsInsightsHtml() {
+  const rows = adminResultsRows;
+  const stats = adminResultsStats;
+  const eligible = rows.filter((r) => chNum(r.total_time_seconds) > 0);
+  if (!eligible.length) return "";
+  const live = eligible.filter((r) => !r.disqualified_at);
+  const fastest = live.slice().sort((a, b) => a.total_time_seconds - b.total_time_seconds)[0];
+  const slowest = live.slice().sort((a, b) => b.total_time_seconds - a.total_time_seconds)[0];
+  const flaggedCount = adminResultsFlags.size;
+  const dqCount = rows.filter((r) => r.disqualified_at).length;
+
+  const tile = (label, value, sub = "", cls = "") =>
+    `<div class="insight-tile ${cls}"><span>${label}</span><strong>${value}</strong>${sub ? `<small>${sub}</small>` : ""}</div>`;
+
+  return `
+    <div class="insight-grid">
+      ${tile("Submissions", rows.length, dqCount ? `${dqCount} disqualified` : "")}
+      ${tile("Median time", live.length ? chMinutesLabel(stats.medianTime) : "—", live.length ? `Median score ${Math.round(stats.medianScore * 10) / 10}` : "")}
+      ${fastest ? tile("Fastest finish", chMinutesLabel(fastest.total_time_seconds), escapeHtml(fastest.full_name || "Student")) : ""}
+      ${slowest ? tile("Slowest finish", chMinutesLabel(slowest.total_time_seconds), escapeHtml(slowest.full_name || "Student")) : ""}
+      ${tile("Needs review", flaggedCount, flaggedCount ? "Suspiciously quick" : "No unusual timing", flaggedCount ? "alert" : "")}
+    </div>`;
+}
+
+function resultDetailHtml(r) {
+  const total = chNum(r.total_time_seconds);
+  const tracked = chNum(r.tracked_time_seconds);
+  const flag = adminResultsFlags.get(r.attempt_id);
+  const meds = adminResultsStats?.subjectMedians || {};
+  const subj = (r.subject_times || [])
+    .slice()
+    .sort((a, b) => subjectSortRank(a.subject) - subjectSortRank(b.subject));
+  const cards = subj
+    .map((s) => {
+      const sec = chNum(s.seconds);
+      const share = tracked ? (sec / tracked) * 100 : 0;
+      const med = chNum(meds[s.subject]);
+      const ratio = med > 0 ? sec / med : null;
+      const att = chNum(s.correct) + chNum(s.wrong);
+      const ratioHtml =
+        ratio === null
+          ? ""
+          : `<span class="vs ${ratio < 0.4 ? "low" : ratio > 1.8 ? "high" : ""}">${ratio.toFixed(1)}× class median (${chMinutesLabel(med)})</span>`;
+      return `<div class="subject-time-card">
+        <div class="subject-time-head"><span>${subjectDot(s.subject)}${escapeHtml(s.subject)}</span><strong>${chMinutesLabel(sec)}</strong></div>
+        ${analyticsBar(share, 100, subjectColor(s.subject))}
+        <div class="subject-time-meta">
+          <span>${Math.round(share)}% of question time</span>${ratioHtml}
+        </div>
+        <div class="subject-time-meta">
+          <span><b class="c-ok">${chNum(s.correct)}</b> correct · <b class="c-bad">${chNum(s.wrong)}</b> wrong · ${chNum(s.unattempted)} skipped</span>
+          <span>${att ? chMinutesLabel(sec / att) + " / answer" : "—"}</span>
+        </div>
+        <div class="subject-time-meta"><span>Marks ${chNum(s.marks)} / ${chNum(s.total)}</span></div>
+      </div>`;
+    })
+    .join("");
+
+  return `
+    <div class="result-detail">
+      ${
+        flag
+          ? `<div class="flag-box ${flag.level}"><strong>${flag.level === "high" ? "⚠ Unusual timing" : "Worth a closer look"}</strong><ul>${flag.reasons.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul><small>This is an automatic hint, not proof — check the answers before removing anyone.</small></div>`
+          : ""
+      }
+      ${
+        r.disqualified_at
+          ? `<div class="flag-box dq"><strong>Disqualified ${formatDateTime(r.disqualified_at)}</strong>${r.disqualification_reason ? `<p>${escapeHtml(r.disqualification_reason)}</p>` : ""}</div>`
+          : ""
+      }
+      <div class="detail-meta">
+        <span><b>Overall time</b> ${total ? formatDurationPrecise(total) : "—"}</span>
+        <span><b>Started</b> ${r.started_at ? formatDateTime(r.started_at) : "—"}</span>
+        <span><b>Submitted</b> ${r.submitted_at ? formatDateTime(r.submitted_at) : "—"}</span>
+        <span><b>Time on questions</b> ${tracked ? formatDurationPrecise(tracked) : "—"}</span>
+      </div>
+      <div class="subject-time-grid">${cards || `<span class="text-muted">No subject timing recorded.</span>`}</div>
+    </div>`;
+}
+
+function formatShortDateTime(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+}
+
+function renderStudentResultsTable() {
+  const body = document.getElementById("studentResultsBody");
+  if (!body) return;
+  const { q, filter, sort } = adminResultsView;
+  const needle = q.trim().toLowerCase();
+  let rows = adminResultsRows.filter((r) => {
+    if (needle && !(r.full_name || "").toLowerCase().includes(needle)) return false;
+    if (filter === "flagged") return adminResultsFlags.has(r.attempt_id);
+    if (filter === "dq") return !!r.disqualified_at;
+    return true;
+  });
+  const by = {
+    rank: (a, b) =>
+      (a.rnk ?? 1e9) - (b.rnk ?? 1e9) ||
+      (a.full_name || "").localeCompare(b.full_name || ""),
+    recent: (a, b) => new Date(b.submitted_at || 0) - new Date(a.submitted_at || 0),
+    score: (a, b) => chNum(b.total_score) - chNum(a.total_score),
+    fastest: (a, b) => (chNum(a.total_time_seconds) || 1e12) - (chNum(b.total_time_seconds) || 1e12),
+    slowest: (a, b) => chNum(b.total_time_seconds) - chNum(a.total_time_seconds),
+    name: (a, b) => (a.full_name || "").localeCompare(b.full_name || ""),
+  }[sort];
+  rows = rows.slice().sort(by);
+
+  const countTag = document.getElementById("resultsCountTag");
+  if (countTag)
+    countTag.textContent = `${adminResultsRows.length} submission${adminResultsRows.length === 1 ? "" : "s"}`;
+
+  if (!rows.length) {
+    body.innerHTML = `<tr class="results-empty"><td colspan="10" class="text-muted">${adminResultsRows.length ? "No students match this filter." : "No attempts yet."}</td></tr>`;
+    return;
+  }
+
+  body.innerHTML = rows
+    .map((r) => {
+      const dq = !!r.disqualified_at;
+      const fl = adminResultsFlags.get(r.attempt_id);
+      const open = adminExpandedRows.has(r.attempt_id);
+      const rankCell = dq
+        ? `<span class="rank-na" title="Not ranked">—</span>`
+        : r.rnk
+          ? `<span class="rank-pill">${medalFor(r.rnk)}#${r.rnk}</span>`
+          : "—";
+      const pctCell =
+        dq || r.percentile === null || r.percentile === undefined
+          ? "—"
+          : `${Number(r.percentile).toFixed(2)}%`;
+      const timeCell = chNum(r.total_time_seconds)
+        ? `<div class="time-cell"><strong>${chMinutesLabel(r.total_time_seconds)}</strong>${
+            fl
+              ? `<span class="flag-chip ${fl.level}" title="${escapeHtml(fl.reasons.join(" "))}">${fl.level === "high" ? "⚠ Very fast" : "Quick"}</span>`
+              : ""
+          }</div>`
+        : "—";
+      return `
+      <tr class="result-row ${dq ? "row-dq" : ""} ${open ? "row-open" : ""} ${dq ? "" : rankRowClass(r.rnk)}">
+        <td data-label="Rank" class="rank-td">${rankCell}</td>
+        <td data-label="Student" class="student-td"><div class="student-cell"><strong>${escapeHtml(r.full_name || "Student")}</strong><div class="student-tags">${dq ? `<span class="status-tag dq-tag">Disqualified</span>` : ""}<span class="status-tag ${r.status}">${r.status.replace("_", " ")}</span></div></div></td>
+        <td data-label="Score"><strong>${r.total_score}</strong><small class="text-muted"> / ${r.total_marks}</small></td>
+        <td data-label="Correct" class="num c-ok">${r.correct_count}</td>
+        <td data-label="Wrong" class="num c-bad">${r.wrong_count}</td>
+        <td data-label="Unanswered" class="num">${r.unanswered_count ?? 0}</td>
+        <td data-label="Percentile" class="num">${pctCell}</td>
+        <td data-label="Time taken">${timeCell}</td>
+        <td data-label="Submitted" class="submitted-td">${r.submitted_at ? formatShortDateTime(r.submitted_at) : "—"}</td>
+        <td class="row-actions"><div class="row-actions-inner">
+          <button type="button" class="btn btn-sm js-toggle-detail" data-id="${r.attempt_id}" aria-expanded="${open}" title="Subject-wise and overall time taken">Time ${open ? "▴" : "▾"}</button>
+          <a class="btn btn-sm" href="#/result?attempt=${encodeURIComponent(r.attempt_id)}">Report</a>
+          ${
+            dq
+              ? `<button type="button" class="btn btn-sm js-reinstate" data-id="${r.attempt_id}">Reinstate</button>`
+              : `<button type="button" class="btn btn-sm btn-danger js-dq" data-id="${r.attempt_id}" data-name="${escapeHtml(r.full_name || "this student")}">Remove</button>`
+          }
+        </div></td>
+      </tr>
+      <tr class="result-detail-row" ${open ? "" : "hidden"} data-detail="${r.attempt_id}"><td colspan="10">${open ? resultDetailHtml(r) : ""}</td></tr>`;
+    })
+    .join("");
+}
+
+function bindResultsControls() {
+  const card = document.getElementById("studentResultsCard");
+  if (!card || card.dataset.bound) return;
+  card.dataset.bound = "1";
+  document.getElementById("resultsSearch")?.addEventListener("input", (e) => {
+    adminResultsView.q = e.target.value;
+    renderStudentResultsTable();
+  });
+  document.getElementById("resultsFilter")?.addEventListener("change", (e) => {
+    adminResultsView.filter = e.target.value;
+    renderStudentResultsTable();
+  });
+  document.getElementById("resultsSort")?.addEventListener("change", (e) => {
+    adminResultsView.sort = e.target.value;
+    renderStudentResultsTable();
+  });
+  card.addEventListener("click", async (e) => {
+    const toggle = e.target.closest(".js-toggle-detail");
+    if (toggle) {
+      const id = toggle.dataset.id;
+      if (adminExpandedRows.has(id)) adminExpandedRows.delete(id);
+      else adminExpandedRows.add(id);
+      renderStudentResultsTable();
+      return;
+    }
+    const dqBtn = e.target.closest(".js-dq");
+    if (dqBtn) return removeAttempt(dqBtn.dataset.id, dqBtn, dqBtn.dataset.name);
+    const reBtn = e.target.closest(".js-reinstate");
+    if (reBtn) return reinstateAttempt(reBtn.dataset.id, reBtn);
+  });
+}
+
 async function loadStudentResults() {
   const statusEl = document.getElementById("resultDeclarationStatus");
   const actionsEl = document.getElementById("resultDeclarationActions");
   const body = document.getElementById("studentResultsBody");
+  const insightsEl = document.getElementById("timeInsights");
+  bindResultsControls();
 
   const declared = !!currentTest.result_release_at;
   statusEl.innerHTML = declared
@@ -2281,189 +2627,148 @@ async function loadStudentResults() {
         "success",
       );
       await loadStudentResults();
-      await loadLeaderboard();
     };
   }
 
+  body.innerHTML = `<tr class="results-empty"><td colspan="10" class="text-muted">Loading results…</td></tr>`;
   const { data, error } = await sb.rpc("admin_get_test_results", {
     p_test_id: currentTest.id,
   });
   if (error) {
-    body.innerHTML = `<tr><td colspan="7" class="text-muted">${escapeHtml(friendlyError(error))}</td></tr>`;
+    body.innerHTML = `<tr class="results-empty"><td colspan="10" class="text-muted">${escapeHtml(friendlyError(error))}</td></tr>`;
+    if (insightsEl) insightsEl.innerHTML = "";
     return;
   }
-  body.innerHTML = !data?.length
-    ? `<tr><td colspan="7" class="text-muted">No attempts yet.</td></tr>`
-    : data
-        .map(
-          (r) => `
-    <tr>
-      <td>${escapeHtml(r.full_name || "Student")}${
-        r.disqualified_at
-          ? ` <span class="status-tag" style="background:var(--danger-tint);color:var(--danger);">DQ</span>`
-          : ""
-      }</td>
-      <td><span class="status-tag ${r.status}">${r.status.replace("_", " ")}</span></td>
-      <td>${r.total_score}</td>
-      <td>${r.correct_count}</td>
-      <td>${r.wrong_count}</td>
-<td>${r.unanswered_count ?? 0}</td>
-      <td>${r.submitted_at ? formatDateTime(r.submitted_at) : "—"}</td>
-    </tr>
-  `,
-        )
-        .join("");
+  adminResultsRows = (data || []).map((r) => ({
+    ...r,
+    total_score: chNum(r.total_score),
+    total_marks: chNum(r.total_marks),
+    correct_count: chNum(r.correct_count),
+    wrong_count: chNum(r.wrong_count),
+    unanswered_count: chNum(r.unanswered_count),
+    total_time_seconds: chNum(r.total_time_seconds),
+    tracked_time_seconds: chNum(r.tracked_time_seconds),
+    subject_times: Array.isArray(r.subject_times) ? r.subject_times : [],
+    rnk: r.rnk === null || r.rnk === undefined ? null : Number(r.rnk),
+    percentile:
+      r.percentile === null || r.percentile === undefined
+        ? null
+        : Number(r.percentile),
+  }));
+  const analysed = analyseTimeFlags(adminResultsRows);
+  adminResultsFlags = analysed.flags;
+  adminResultsStats = analysed.stats;
+  if (insightsEl) insightsEl.innerHTML = resultsInsightsHtml();
+  renderStudentResultsTable();
+  renderAdminSummary();
 }
 
-async function loadLeaderboard() {
-  // admin_get_test_leaderboard() is never gated by result_release_at, so
-  // admins can review and disqualify suspicious attempts before results are
-  // declared — unlike the student-facing get_test_leaderboard().
-  const { data, error } = await sb.rpc("admin_get_test_leaderboard", {
-    p_test_id: currentTest.id,
-  });
 
-  const body = document.getElementById("leaderboardBody");
-
-  if (!body) return;
-
-  if (error) {
-    console.error("Leaderboard RPC error:", error);
-
-    body.innerHTML = `
-      <tr>
-        <td colspan="5" class="text-muted">
-          ${escapeHtml(friendlyError(error))}
-        </td>
-      </tr>
-    `;
-
-    return;
-  }
-
-  if (!data || data.length === 0) {
-    body.innerHTML = `
-      <tr>
-        <td colspan="5" class="text-muted">
-          No submissions yet.
-        </td>
-      </tr>
-    `;
-
-    return;
-  }
-
-  body.innerHTML = data
-    .map((r) => {
-      const student = r.full_name || "Student";
-      const attemptId = r.attempt_id || "";
-
-      if (r.disqualified) {
-        return `
-        <tr class="disqualified-row">
-          <td>—</td>
-          <td>${escapeHtml(student)} <span class="status-tag" style="background:var(--danger-tint);color:var(--danger);">DQ</span></td>
-          <td>${r.total_score}</td>
-          <td>—</td>
-          <td class="text-muted">Disqualified</td>
-        </tr>
-      `;
-      }
-
-      return `
-        <tr>
-          <td>#${r.rnk}</td>
-          <td>${escapeHtml(student)}</td>
-          <td>${r.total_score}</td>
-          <td>${Number(r.percentile ?? 0).toFixed(3)}%</td>
-          <td>
-            <button
-              type="button"
-              class="btn btn-sm btn-warning js-remove-attempt"
-              data-id="${attemptId}"
-              ${attemptId ? "" : "disabled"}
-            >
-              Remove
-            </button>
-          </td>
-        </tr>
-      `;
-    })
-    .join("");
-
-  body.querySelectorAll(".js-remove-attempt").forEach((btn) => {
-    btn.addEventListener("click", function () {
-      const attemptId = this.dataset.id;
-
-      removeAttempt(attemptId, this);
-    });
+/* ---- Disqualify / reinstate ---- */
+function askDisqualify(name) {
+  return new Promise((resolve) => {
+    const textEl = document.getElementById("dqModalText");
+    const reasonEl = document.getElementById("dqReason");
+    const okBtn = document.getElementById("dqConfirmBtn");
+    const cancelBtn = document.getElementById("dqCancelBtn");
+    const backdrop = document.getElementById("dqModal");
+    textEl.textContent = `${name}'s attempt will be removed from every leaderboard and their rank and percentile will be withheld. They will see a cheating notice on their report; their score and answer review stay visible. You can reinstate the attempt later.`;
+    reasonEl.value = "";
+    openModal("dqModal");
+    reasonEl.focus();
+    const finish = (result) => {
+      closeModal("dqModal");
+      okBtn.onclick = cancelBtn.onclick = backdrop.onclick = null;
+      document.removeEventListener("keydown", onKey);
+      resolve(result);
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") finish({ confirmed: false });
+    };
+    document.addEventListener("keydown", onKey);
+    okBtn.onclick = () => finish({ confirmed: true, reason: reasonEl.value.trim() });
+    cancelBtn.onclick = () => finish({ confirmed: false });
+    backdrop.onclick = (e) => {
+      if (e.target === backdrop) finish({ confirmed: false });
+    };
   });
 }
-async function removeAttempt(id, button) {
+
+async function refreshAdminResultViews() {
+  await loadStudentResults();
+}
+
+async function removeAttempt(id, button, name = "this student") {
   if (!id) {
-    toast(
-      "Could not identify this attempt. Refresh the leaderboard and try again.",
-      "error",
-    );
-
+    toast("Could not identify this attempt. Refresh and try again.", "error");
     return;
   }
+  const { confirmed, reason } = await askDisqualify(name);
+  if (!confirmed) return;
 
-  const confirmed = confirm(
-    "Remove this student from the leaderboard for suspected cheating? Their attempt will be disqualified.",
-  );
-
-  if (!confirmed) {
-    return;
-  }
-
+  const original = button ? button.textContent : "";
   if (button) {
     button.disabled = true;
-    button.textContent = "Removing...";
+    button.textContent = "Removing…";
   }
-
   try {
-    const { data, error } = await sb.rpc("admin_disqualify_attempt", {
+    const { error } = await sb.rpc("admin_disqualify_attempt", {
       p_attempt_id: id,
+      p_reason: reason || null,
     });
-
     if (error) {
       console.error("admin_disqualify_attempt error:", error);
-
       if (button) {
         button.disabled = false;
-        button.textContent = "Remove";
+        button.textContent = original;
       }
-
       toast(friendlyError(error), "error");
-
       return;
     }
-
-    console.log("Attempt successfully disqualified:", data);
-
-    toast("Student removed from this leaderboard", "success");
-
-    await loadLeaderboard();
+    toast(`${name} was disqualified and removed from the leaderboard`, "success");
+    await refreshAdminResultViews();
   } catch (err) {
     console.error("Unexpected remove attempt error:", err);
-
     if (button) {
       button.disabled = false;
-      button.textContent = "Remove";
+      button.textContent = original;
     }
-
     toast("Something went wrong while removing the student.", "error");
   }
 }
 
+async function reinstateAttempt(id, button) {
+  if (!id) return;
+  if (
+    !confirm(
+      "Reinstate this attempt? It will return to the leaderboard and the student's rank and percentile will be visible again.",
+    )
+  )
+    return;
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Reinstating…";
+  }
+  const { error } = await sb.rpc("admin_reinstate_attempt", { p_attempt_id: id });
+  if (error) {
+    toast(friendlyError(error), "error");
+    if (button) {
+      button.disabled = false;
+      button.textContent = "Reinstate";
+    }
+    return;
+  }
+  toast("Attempt reinstated", "success");
+  await refreshAdminResultViews();
+}
+
 async function loadReports() {
   const list = document.getElementById("reportsList");
-  if (!currentTest) return;
+  if (!currentTest || !list) return;
   const { data, error } = await sb
     .from("question_reports")
     .select(
-      "id, reason, details, created_at, questions(question_text), profiles(full_name)",
+      "id, question_id, reason, details, created_at, questions(question_text, subject, question_type), profiles(full_name)",
     )
     .eq("test_id", currentTest.id)
     .order("created_at", { ascending: false });
@@ -2471,18 +2776,38 @@ async function loadReports() {
     list.innerHTML = `<div class="error-box">${escapeHtml(friendlyError(error))}</div>`;
     return;
   }
-  list.innerHTML = !data?.length
+  adminReports = data || [];
+  const tag = document.getElementById("reportsCountTag");
+  if (tag)
+    tag.textContent = adminReports.length
+      ? `${adminReports.length} report${adminReports.length === 1 ? "" : "s"}`
+      : "";
+  renderAdminSummary();
+  list.innerHTML = !adminReports.length
     ? `<div class="empty-state">No question reports yet.</div>`
-    : data
-        .map(
-          (r) => `
-    <div class="list-row"><div class="list-row-main"><div class="list-row-title">${escapeHtml(r.reason)}</div>
-    <div class="list-row-meta">${escapeHtml(r.profiles?.full_name || "Student")} · ${formatDateTime(r.created_at)}${r.details ? " · " + escapeHtml(r.details) : ""}</div>
-    <div class="question-text" style="font-size:13px;">${escapeHtml(r.questions?.question_text || "Question unavailable")}</div></div></div>`,
-        )
+    : adminReports
+        .map((r) => {
+          const exists = adminQuestionsCache.some((q) => q.id === r.question_id);
+          return `
+    <div class="list-row report-row">
+      <div class="list-row-main">
+        <div class="list-row-title">${escapeHtml(r.reason)}</div>
+        <div class="list-row-meta">${escapeHtml(r.profiles?.full_name || "Student")} · ${formatDateTime(r.created_at)}${r.questions?.subject ? " · " + escapeHtml(r.questions.subject) : ""}${r.details ? " · " + escapeHtml(r.details) : ""}</div>
+        <div class="question-text report-question-text">${escapeHtml(r.questions?.question_text || "This question has been removed.")}</div>
+      </div>
+      <div class="list-row-actions">
+        <button type="button" class="btn btn-sm btn-primary js-report-preview" data-question="${r.question_id}" ${exists ? "" : "disabled"}>👁 Preview question</button>
+      </div>
+    </div>`;
+        })
         .join("");
   renderMath(list);
 }
+
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest(".js-report-preview");
+  if (btn && !btn.disabled) openTestPreview(btn.dataset.question);
+});
 
 /* =========================================================================
    6. EXAM VIEW
@@ -3609,25 +3934,360 @@ function renderReviewQuestion(r) {
   `;
 }
 
+/* =========================================================================
+   CHART KIT — dependency-free, theme-aware SVG charts.
+   Every colour is a CSS variable (or a class in style.css), so the same
+   markup renders correctly in both light and dark mode.
+   ========================================================================= */
+let chartUid = 0;
+const chNum = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+};
+const chClamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const chShortDate = (iso) => {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime())
+    ? ""
+    : d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+};
+const chMedian = (arr) => {
+  const a = arr.filter((v) => Number.isFinite(v)).sort((x, y) => x - y);
+  if (!a.length) return 0;
+  const m = Math.floor(a.length / 2);
+  return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+};
+const chQuantile = (arr, q) => {
+  const a = arr.filter((v) => Number.isFinite(v)).sort((x, y) => x - y);
+  if (!a.length) return 0;
+  const pos = (a.length - 1) * q;
+  const lo = Math.floor(pos);
+  const hi = Math.ceil(pos);
+  return a[lo] + (a[hi] - a[lo]) * (pos - lo);
+};
+function chMinutesLabel(seconds) {
+  const s = Math.max(0, Math.round(chNum(seconds)));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${String(s % 60).padStart(2, "0")}s`;
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
+}
+function chNiceCeil(v) {
+  if (v <= 0) return 10;
+  const pow = Math.pow(10, Math.floor(Math.log10(v)));
+  const n = v / pow;
+  const nice = n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10;
+  return nice * pow;
+}
+
+function chartLegend(items) {
+  return `<div class="ch-legend">${items
+    .map(
+      (i) =>
+        `<span><i class="ch-swatch ${i.dashed ? "dashed" : ""} ${i.round ? "round" : ""}" style="--sw:${i.color}"></i>${escapeHtml(i.label)}${i.value !== undefined ? ` <b>${escapeHtml(String(i.value))}</b>` : ""}</span>`,
+    )
+    .join("")}</div>`;
+}
+
+/* Bar graph of percentages (0-100). rows: [{label, value, tip, latest}] */
+function chartTrendBars(rows, { avgLine = null, height = 300 } = {}) {
+  const n = rows.length;
+  const W = Math.max(820, n * 76 + 100);
+  const H = height;
+  const pl = 46;
+  const pr = 22;
+  const pt = 28;
+  const pb = 44;
+  const iw = W - pl - pr;
+  const ih = H - pt - pb;
+  const slot = iw / n;
+  const bw = Math.max(14, Math.min(52, slot * 0.56));
+  const y = (v) => pt + ih - (chClamp(v, 0, 100) / 100) * ih;
+
+  const grid = [0, 25, 50, 75, 100]
+    .map(
+      (g) =>
+        `<line class="ch-grid" x1="${pl}" x2="${W - pr}" y1="${y(g)}" y2="${y(g)}"/>` +
+        `<text class="ch-tick" x="${pl - 10}" y="${y(g) + 4}" text-anchor="end">${g}%</text>`,
+    )
+    .join("");
+
+  const bars = rows
+    .map((r, i) => {
+      const cx = pl + slot * i + slot / 2;
+      const top = y(r.value);
+      const h = Math.max(r.value > 0 ? 3 : 0, pt + ih - top);
+      const bx = cx - bw / 2;
+      const rad = Math.min(8, bw / 2, h);
+      // rounded top corners only
+      const d = `M${bx},${pt + ih} V${pt + ih - h + rad} Q${bx},${pt + ih - h} ${bx + rad},${pt + ih - h} H${bx + bw - rad} Q${bx + bw},${pt + ih - h} ${bx + bw},${pt + ih - h + rad} V${pt + ih} Z`;
+      return (
+        `<path class="ch-bar-score ${r.latest ? "latest" : ""}" d="${d}"><title>${escapeHtml(r.tip || "")}</title></path>` +
+        `<text class="ch-value" x="${cx}" y="${pt + ih - h - 8}" text-anchor="middle">${Math.round(r.value)}%</text>` +
+        `<text class="ch-tick" x="${cx}" y="${H - pb + 22}" text-anchor="middle">${escapeHtml(r.label)}</text>`
+      );
+    })
+    .join("");
+
+  const avg =
+    avgLine !== null
+      ? `<line class="ch-avg" x1="${pl}" x2="${W - pr}" y1="${y(avgLine)}" y2="${y(avgLine)}"/>`
+      : "";
+
+  return `<div class="ch-scroll"><svg class="ch-svg" viewBox="0 0 ${W} ${H}" style="min-width:${Math.min(W, 900)}px" role="img" aria-label="Score trend bar chart">
+    ${grid}${bars}${avg}
+  </svg></div>`;
+}
+
+/* Donut. segments: [{value,color,label}] */
+function chartDonut(segments, { size = 176, stroke = 22, centerValue = "", centerLabel = "" } = {}) {
+  const total = segments.reduce((s, x) => s + chNum(x.value), 0);
+  const r = (size - stroke) / 2;
+  const c = 2 * Math.PI * r;
+  const live = segments.filter((s) => chNum(s.value) > 0);
+  const gap = live.length > 1 ? 3 : 0;
+  let acc = 0;
+  const arcs = total
+    ? live
+        .map((s) => {
+          const len = Math.max(0, (chNum(s.value) / total) * c - gap);
+          const el = `<circle class="ch-arc" cx="${size / 2}" cy="${size / 2}" r="${r}" stroke-width="${stroke}" stroke-dasharray="${len.toFixed(2)} ${(c - len).toFixed(2)}" stroke-dashoffset="${(-acc).toFixed(2)}" style="--arc:${s.color}" transform="rotate(-90 ${size / 2} ${size / 2})"><title>${escapeHtml(s.label || "")}: ${chNum(s.value)}</title></circle>`;
+          acc += (chNum(s.value) / total) * c;
+          return el;
+        })
+        .join("")
+    : "";
+  return `<div class="ch-donut" style="--d:${size}px">
+    <svg viewBox="0 0 ${size} ${size}" role="img" aria-label="Donut chart">
+      <circle class="ch-donut-track" cx="${size / 2}" cy="${size / 2}" r="${r}" stroke-width="${stroke}"/>
+      ${arcs}
+    </svg>
+    <div class="ch-donut-center"><strong>${centerValue}</strong><span>${escapeHtml(centerLabel)}</span></div>
+  </div>`;
+}
+
+/* Horizontal stacked bar (HTML, fully responsive). parts: [{value,color,label}] */
+function chartStackBar(parts, { height = 10 } = {}) {
+  const total = parts.reduce((s, p) => s + chNum(p.value), 0);
+  if (!total) return `<div class="ch-stack" style="--h:${height}px"></div>`;
+  return `<div class="ch-stack" style="--h:${height}px">${parts
+    .filter((p) => chNum(p.value) > 0)
+    .map(
+      (p) =>
+        `<span style="width:${(chNum(p.value) / total) * 100}%;background:${p.color}" title="${escapeHtml(p.label || "")}: ${chNum(p.value)}"></span>`,
+    )
+    .join("")}</div>`;
+}
+
+/* Per-question timeline: one bar per question, height = seconds, colour = outcome.
+   items: [{n, seconds, state:'correct'|'wrong'|'skipped', subject}] */
+function chartQuestionTimeline(items) {
+  const n = items.length;
+  const W = Math.max(820, n * 15 + 80);
+  const H = 250;
+  const pl = 44;
+  const pr = 14;
+  const pt = 16;
+  const pb = 46;
+  const iw = W - pl - pr;
+  const ih = H - pt - pb;
+  const maxSec = Math.max(30, Math.ceil((Math.max(...items.map((i) => chNum(i.seconds)), 10) * 1.1) / 30) * 30);
+  const slot = iw / n;
+  const bw = Math.max(3, Math.min(20, slot * 0.68));
+  const y = (v) => pt + ih - (chNum(v) / maxSec) * ih;
+  const colour = { correct: "var(--success)", wrong: "var(--danger)", skipped: "var(--not-visited)" };
+  const avg = items.reduce((s, i) => s + chNum(i.seconds), 0) / n;
+
+  const grid = [0, 0.5, 1]
+    .map((f) => {
+      const v = maxSec * f;
+      return (
+        `<line class="ch-grid" x1="${pl}" x2="${W - pr}" y1="${y(v)}" y2="${y(v)}"/>` +
+        `<text class="ch-tick" x="${pl - 8}" y="${y(v) + 4}" text-anchor="end">${chMinutesLabel(v)}</text>`
+      );
+    })
+    .join("");
+
+  const bars = items
+    .map((it, i) => {
+      const bx = pl + slot * i + (slot - bw) / 2;
+      const by = y(it.seconds);
+      const h = Math.max(it.seconds > 0 ? 2 : 0, pt + ih - by);
+      return `<rect class="ch-bar" x="${bx.toFixed(1)}" y="${(pt + ih - h).toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="2" style="--bar:${colour[it.state]}"><title>Q${it.n} · ${escapeHtml(it.subject || "")} · ${chMinutesLabel(it.seconds)} · ${it.state}</title></rect>`;
+    })
+    .join("");
+
+  // Subject strip under the axis
+  let strip = "";
+  let runStart = 0;
+  items.forEach((it, i) => {
+    const last = i === n - 1 || items[i + 1].subject !== it.subject;
+    if (last) {
+      const x1 = pl + slot * runStart + 1;
+      const x2 = pl + slot * (i + 1) - 1;
+      strip += `<rect x="${x1.toFixed(1)}" y="${H - pb + 10}" width="${Math.max(1, x2 - x1).toFixed(1)}" height="5" rx="2.5" fill="${subjectColor(it.subject)}"/>`;
+      if (x2 - x1 > 56)
+        strip += `<text class="ch-tick" x="${((x1 + x2) / 2).toFixed(1)}" y="${H - pb + 32}" text-anchor="middle">${escapeHtml(it.subject || "")}</text>`;
+      runStart = i + 1;
+    }
+  });
+
+  return `<div class="ch-scroll"><svg class="ch-svg" viewBox="0 0 ${W} ${H}" style="min-width:${Math.min(W, 1100)}px" role="img" aria-label="Time per question">
+    ${grid}
+    <line class="ch-avg" x1="${pl}" x2="${W - pr}" y1="${y(avg)}" y2="${y(avg)}"/>
+    ${bars}${strip}
+  </svg></div>`;
+}
+
+const SUBJECT_SORT = ["Physics", "Chemistry", "Mathematics", "Biology"];
+const subjectSortRank = (s) => {
+  const i = SUBJECT_SORT.indexOf(s);
+  return i === -1 ? SUBJECT_SORT.length : i;
+};
+
+function outcomeLegend(correct, wrong, skipped) {
+  return chartLegend([
+    { label: "Correct", value: correct, color: "var(--success)", round: true },
+    { label: "Wrong", value: wrong, color: "var(--danger)", round: true },
+    { label: "Unattempted", value: skipped, color: "var(--not-visited)", round: true },
+  ]);
+}
+
+const SUPPORT_EMAIL = "shobhitdwivedi.in@gmail.com";
+
+// Pre-filled email so a disqualified student can raise a query in one tap.
+function buildQueryLinks(report) {
+  const title = report.test_title || "Test";
+  const subject = `Query about my disqualified attempt - ${title}`;
+  const body = [
+    "Hello,",
+    "",
+    "I would like to raise a query about my disqualified attempt.",
+    "",
+    `Name: ${report.full_name || ""}`,
+    `Test: ${title}`,
+    `Attempt ID: ${report.attempt_id || ""}`,
+    `Submitted: ${report.submitted_at ? new Date(report.submitted_at).toLocaleString() : ""}`,
+    "",
+    "My query:",
+    "",
+  ].join("\n");
+  const q = `subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  return {
+    mailto: `mailto:${SUPPORT_EMAIL}?${q}`,
+    gmail: `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(SUPPORT_EMAIL)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`,
+  };
+}
+
 function renderReportAnalysis(report, subjectRows, review) {
-  const totalMax = subjectRows.reduce(
-    (sum, row) => sum + Number(row.total || 0),
-    0,
-  );
+  const totalMax = subjectRows.reduce((sum, row) => sum + Number(row.total || 0), 0);
   const scorePct =
     totalMax > 0
-      ? Math.max(
-          0,
-          Math.min(100, (Number(report.total_score || 0) / totalMax) * 100),
-        )
+      ? chClamp((Number(report.total_score || 0) / totalMax) * 100, 0, 100)
       : 0;
-  const attempted = review.filter(
-    (row) => row.is_correct !== null && row.is_correct !== undefined,
-  ).length;
-  const correct = review.filter((row) => row.is_correct === true).length;
+  const correct = review.filter((r) => r.is_correct === true).length;
+  const wrong = review.filter((r) => r.is_correct === false).length;
+  const skipped = Math.max(0, review.length - correct - wrong);
+  const attempted = correct + wrong;
   const accuracy = attempted ? (correct / attempted) * 100 : 0;
-  return `<section class="report-analysis-grid"><div class="card report-chart-card"><div class="section-title"><h2>Test performance</h2><span class="text-muted">Score and accuracy</span></div><div class="report-radials">${renderRadialProgress(scorePct, { size: 132, stroke: 10, color: "var(--brand)", subLabel: "Score" })}${renderRadialProgress(accuracy, { size: 132, stroke: 10, color: "var(--success)", subLabel: "Accuracy" })}</div></div><div class="card report-chart-card"><div class="section-title"><h2>Subject breakdown</h2><span class="text-muted">Marks earned</span></div><div class="subject-performance-list">${subjectRows.map((row) => `<div class="subject-performance-row"><div class="subject-performance-label"><span>${subjectDot(row.subject)}${escapeHtml(row.subject)}</span><strong>${row.obtained} / ${row.total}</strong></div>${analyticsBar(Number(row.obtained), Number(row.total), subjectColor(row.subject))}</div>`).join("")}</div></div></section>`;
+  const totalTime = subjectRows.reduce((s, r) => s + chNum(r.time_spent_seconds), 0);
+
+  const subjectBreakdown = subjectRows
+    .map((row) => {
+      const c = chNum(row.correct_count);
+      const w = chNum(row.wrong_count);
+      const u = chNum(row.unattempted);
+      const acc = c + w ? Math.round((c / (c + w)) * 100) : null;
+      return `<div class="subject-performance-row">
+        <div class="subject-performance-label"><span>${subjectDot(row.subject)}${escapeHtml(row.subject)}</span><strong>${row.obtained} / ${row.total}</strong></div>
+        ${chartStackBar([
+          { value: c, color: "var(--success)", label: "Correct" },
+          { value: w, color: "var(--danger)", label: "Wrong" },
+          { value: u, color: "var(--not-visited)", label: "Unattempted" },
+        ])}
+        <small class="ch-sub">${c} correct · ${w} wrong · ${u} unattempted · ${acc === null ? "no accuracy yet" : `${acc}% accuracy`}</small>
+      </div>`;
+    })
+    .join("");
+
+  const timeRows = subjectRows
+    .map((row) => {
+      const t = chNum(row.time_spent_seconds);
+      const share = totalTime ? (t / totalTime) * 100 : 0;
+      const att = chNum(row.correct_count) + chNum(row.wrong_count);
+      return `<div class="subject-performance-row">
+        <div class="subject-performance-label"><span>${subjectDot(row.subject)}${escapeHtml(row.subject)}</span><strong>${formatDurationPrecise(t)}</strong></div>
+        ${analyticsBar(share, 100, subjectColor(row.subject))}
+        <small class="ch-sub">${Math.round(share)}% of total time${att ? ` · ${chMinutesLabel(t / att)} per attempted question` : ""}</small>
+      </div>`;
+    })
+    .join("");
+
+  const ordered = review
+    .slice()
+    .sort(
+      (a, b) =>
+        subjectSortRank(a.subject) - subjectSortRank(b.subject) ||
+        chNum(a.question_order) - chNum(b.question_order),
+    )
+    .map((r, i) => ({
+      n: i + 1,
+      seconds: chNum(r.time_spent_seconds),
+      subject: r.subject,
+      state: r.is_correct === true ? "correct" : r.is_correct === false ? "wrong" : "skipped",
+    }));
+  const hasTiming = totalTime > 0 && ordered.length > 0;
+
+  return `<section class="report-charts">
+    <div class="card report-chart-card">
+      <div class="section-title"><h2>Test performance</h2><span class="text-muted">Score and accuracy</span></div>
+      <div class="report-radials">
+        ${renderRadialProgress(scorePct, { size: 132, stroke: 10, color: "var(--brand)", subLabel: "Score" })}
+        ${renderRadialProgress(accuracy, { size: 132, stroke: 10, color: "var(--success)", subLabel: "Accuracy" })}
+      </div>
+    </div>
+
+    <div class="card report-chart-card">
+      <div class="section-title"><h2>Answer outcomes</h2><span class="text-muted">${review.length} questions</span></div>
+      <div class="ch-donut-row">
+        ${chartDonut(
+          [
+            { value: correct, color: "var(--success)", label: "Correct" },
+            { value: wrong, color: "var(--danger)", label: "Wrong" },
+            { value: skipped, color: "var(--not-visited)", label: "Unattempted" },
+          ],
+          { centerValue: `${Math.round(accuracy)}%`, centerLabel: "accuracy" },
+        )}
+        ${outcomeLegend(correct, wrong, skipped)}
+      </div>
+    </div>
+
+    <div class="card report-chart-card">
+      <div class="section-title"><h2>Subject breakdown</h2><span class="text-muted">Marks and outcomes</span></div>
+      <div class="subject-performance-list">${subjectBreakdown || `<div class="empty-state">No subject data.</div>`}</div>
+    </div>
+
+    <div class="card report-chart-card">
+      <div class="section-title"><h2>Time by subject</h2><span class="text-muted">${totalTime ? formatDurationPrecise(totalTime) + " on questions" : "Not recorded"}</span></div>
+      <div class="subject-performance-list">${totalTime ? timeRows : `<div class="empty-state">Time per subject wasn't recorded for this attempt.</div>`}</div>
+    </div>
+
+    <div class="card report-chart-card report-chart-wide">
+      <div class="section-title"><h2>Time per question</h2><span class="text-muted">Where your time went</span></div>
+      ${
+        hasTiming
+          ? chartQuestionTimeline(ordered) + chartLegend([
+              { label: "Correct", color: "var(--success)", round: true },
+              { label: "Wrong", color: "var(--danger)", round: true },
+              { label: "Unattempted", color: "var(--not-visited)", round: true },
+              { label: `Average ${chMinutesLabel(totalTime / Math.max(1, ordered.length))} / question`, color: "var(--muted)", dashed: true },
+            ])
+          : `<div class="empty-state">Question timing wasn't recorded for this attempt.</div>`
+      }
+    </div>
+  </section>`;
 }
+
 
 let reviewQuestions = [];
 let reviewBySubject = {};
@@ -3825,8 +4485,16 @@ async function enterResultView() {
   // results — get_full_report simply returns null/empty for those until
   // then, rather than erroring, so `declared` is derived from that.
   const isPractice = !!report.is_practice;
+  // An attempt the admin disqualified is never ranked: no rank, no percentile,
+  // no leaderboard. Everything else on the report stays visible.
+  const isDisqualified = !!report.disqualified && !isPractice;
+  const dqReason = String(report.disqualification_reason || "").trim();
+  const dqQuery = buildQueryLinks(report);
   const declared =
-    !isPractice && report.rank !== null && report.rank !== undefined;
+    !isPractice &&
+    !isDisqualified &&
+    report.rank !== null &&
+    report.rank !== undefined;
   const subjectRows = report.subject_rows || [];
   const review = report.review || [];
   const board = report.board || [];
@@ -3844,7 +4512,7 @@ async function enterResultView() {
     <div class="card">
       <div class="section-title">
         <h2 style="font-size:17px;">${escapeHtml(report.test_title)} ${categoryBadge(report.category)}</h2>
-        <span class="status-tag ${report.status}">${report.status.replace("_", " ")}</span>
+        <span class="report-status-tags"><span class="status-tag ${report.status}">${report.status.replace("_", " ")}</span>${isDisqualified ? `<span class="status-tag dq-tag">Not ranked</span>` : ""}</span>
       </div>
       <p class="text-muted" style="font-size:13px;">
         ${viewingSomeoneElse ? `Top-3 public report · ${escapeHtml(report.full_name || "Student")} · ` : ""}Submitted ${formatDateTime(report.submitted_at)}
@@ -3863,25 +4531,46 @@ async function enterResultView() {
                   ? `<a class="btn btn-sm btn-secondary" href="#/exam?test=${encodeURIComponent(report.test_id)}&practice=1">🔁 Reattempt this test</a>`
                   : ""
               }
-              <button type="button" class="btn btn-sm" id="printPaperBtn">🖨 Print question paper</button>
             </div>`
           : ""
       }
     </div>
 
     ${
-      !isPractice && !declared
-        ? `<div class="locked-banner">Your score is available. Rank and percentile will be announced when the test is over.</div>`
-        : ""
+      isDisqualified
+        ? `<div class="integrity-banner" role="alert">
+            <span class="integrity-icon">🚫</span>
+            <div>
+              <strong>Cheating was detected on this attempt</strong>
+              <p>Because of this, your <b>rank and percentile are not available</b> and you are not included in any leaderboard. Your score, subject-wise analysis and answer review are shown below as usual.</p>
+              ${
+                dqReason
+                  ? `<div class="integrity-reason"><span>Reason given by the admin</span><p>${escapeHtml(dqReason)}</p></div>`
+                  : ""
+              }
+              ${
+                report.is_owner
+                  ? `<div class="integrity-actions">
+                      <a class="btn btn-sm integrity-btn" href="${dqQuery.mailto}">✉ Raise a query</a>
+                      <a class="integrity-link" href="${dqQuery.gmail}" target="_blank" rel="noopener">Open in Gmail</a>
+                      <span class="integrity-hint">Think this is a mistake? Email <b>${SUPPORT_EMAIL}</b> — your test and attempt details are filled in for you.</span>
+                    </div>`
+                  : ""
+              }
+            </div>
+          </div>`
+        : !isPractice && !declared
+          ? `<div class="locked-banner">Your score is available. Rank and percentile will be announced when the test is over.</div>`
+          : ""
     }
 
     <div class="stat-grid">
       <div class="stat-card"><div class="val">${report.total_score} / ${totalMax}</div><div class="lbl">Score</div></div>
 <div class="stat-card">
-  <div class="val">${isPractice ? "—" : declared ? `${medalFor(report.rank)}#${report.rank}` : "🔒"}</div>
-  <div class="lbl">Rank</div>
+  <div class="val">${isPractice ? "—" : isDisqualified ? "🚫" : declared ? `${medalFor(report.rank)}#${report.rank}` : "🔒"}</div>
+  <div class="lbl">Rank${isDisqualified ? " · withheld" : ""}</div>
 </div>
-      <div class="stat-card"><div class="val">${isPractice ? "—" : declared ? report.percentile + "%" : "🔒"}</div><div class="lbl">Percentile</div></div>
+      <div class="stat-card"><div class="val">${isPractice ? "—" : isDisqualified ? "🚫" : declared ? report.percentile + "%" : "🔒"}</div><div class="lbl">Percentile${isDisqualified ? " · withheld" : ""}</div></div>
       <div class="stat-card"><div class="val">${formatDurationPrecise(timeTakenSec)}</div><div class="lbl">Time taken</div></div>
     </div>
 
@@ -3928,6 +4617,8 @@ async function enterResultView() {
       ${
         isPractice
           ? `<div class="empty-state">Practice re-attempts don't appear on the leaderboard. Your real attempt's rank and percentile are on that report.</div>`
+          : isDisqualified
+            ? `<div class="empty-state">This attempt is not ranked, so it can't be shown on the leaderboard.</div>`
           : !declared
             ? `<div class="empty-state">Rank and percentile will be announced when the test gets over.</div>`
             : board.length === 0
@@ -3966,10 +4657,6 @@ async function enterResultView() {
   `;
   renderMath(content);
   animateRadialProgress(content);
-
-  document.getElementById("printPaperBtn")?.addEventListener("click", () => {
-    openStudentTestPrint(report);
-  });
 }
 
 /* =========================================================================
@@ -4415,33 +5102,91 @@ function renderAnalyticsCharts(data) {
   const outcomes = data.outcomes || {};
   const subjects = data.subjects || [];
   const trend = data.trend || [];
-  const totalOutcome =
-    Number(outcomes.correct || 0) +
-    Number(outcomes.wrong || 0) +
-    Number(outcomes.unattempted || 0);
-  const correctPct = totalOutcome
-    ? (Number(outcomes.correct || 0) / totalOutcome) * 100
-    : 0;
-  const wrongPct = totalOutcome
-    ? (Number(outcomes.wrong || 0) / totalOutcome) * 100
-    : 0;
-  const trendMax = Math.max(
-    ...trend.map((item) => Number(item.percentage) || 0),
-    1,
-  );
+  const correct = chNum(outcomes.correct);
+  const wrong = chNum(outcomes.wrong);
+  const skipped = chNum(outcomes.unattempted);
+  const totalOutcome = correct + wrong + skipped;
+  const acc = correct + wrong ? Math.round((correct / (correct + wrong)) * 100) : 0;
+
+  const barRows = trend.map((t, i) => ({
+    label: chShortDate(t.submitted_at),
+    value: chNum(t.percentage),
+    latest: i === trend.length - 1,
+    tip: `${t.title} · ${chShortDate(t.submitted_at)} — ${t.total_score}/${t.total_marks} (${chNum(t.percentage)}%)${t.accuracy === null || t.accuracy === undefined ? "" : " · accuracy " + chNum(t.accuracy) + "%"}`,
+  }));
+  const latest = trend[trend.length - 1];
+  const prev = trend[trend.length - 2];
+  const delta =
+    latest && prev ? Math.round((chNum(latest.percentage) - chNum(prev.percentage)) * 10) / 10 : null;
+  const deltaHtml =
+    delta === null
+      ? ""
+      : `<span class="ch-delta ${delta >= 0 ? "up" : "down"}">${delta >= 0 ? "▲" : "▼"} ${Math.abs(delta)} pts vs previous test</span>`;
+
+  const subjectRowsHtml = subjects.length
+    ? subjects
+        .map((s) => {
+          const c = chNum(s.correct_count);
+          const w = chNum(s.wrong_count);
+          const u = chNum(s.unattempted);
+          const a = c + w ? Math.round((c / (c + w)) * 100) : null;
+          return `<div class="subject-performance-row">
+            <div class="subject-performance-label"><span>${subjectDot(s.subject)}${escapeHtml(s.subject)}</span><strong>${a === null ? "—" : a + "%"} accuracy</strong></div>
+            ${chartStackBar([
+              { value: c, color: "var(--success)", label: "Correct" },
+              { value: w, color: "var(--danger)", label: "Wrong" },
+              { value: u, color: "var(--not-visited)", label: "Unattempted" },
+            ])}
+            <small class="ch-sub">${c} correct · ${w} wrong · ${u} unattempted · ${chNum(s.obtained)} / ${chNum(s.total)} marks${chNum(s.time_spent_seconds) ? " · " + formatDurationPrecise(s.time_spent_seconds) : ""}</small>
+          </div>`;
+        })
+        .join("")
+    : `<div class="empty-state">Subject analytics will appear after your first submitted test.</div>`;
 
   return `
     <div class="analytics-stat-grid">
-      <div class="analytics-stat-card"><span class="analytics-stat-icon">◔</span><strong>${summary.average_score || 0}%</strong><span>Average score</span></div>
+      <div class="analytics-stat-card"><span class="analytics-stat-icon">%</span><strong>${summary.average_score || 0}%</strong><span>Average score</span></div>
+      <div class="analytics-stat-card"><span class="analytics-stat-icon">★</span><strong>${summary.best_score || 0}%</strong><span>Best score</span></div>
       <div class="analytics-stat-card"><span class="analytics-stat-icon">✓</span><strong>${summary.accuracy || 0}%</strong><span>Accuracy</span></div>
       <div class="analytics-stat-card"><span class="analytics-stat-icon">▣</span><strong>${summary.completed_tests || 0}</strong><span>Tests completed</span></div>
       <div class="analytics-stat-card"><span class="analytics-stat-icon">↗</span><strong>${summary.questions_answered || 0}</strong><span>Questions answered</span></div>
+      <div class="analytics-stat-card"><span class="analytics-stat-icon">◷</span><strong>${chNum(summary.total_time_seconds) ? formatDurationShort(summary.total_time_seconds) : "—"}</strong><span>Time on questions</span></div>
     </div>
+
+    <section class="card analytics-panel">
+      <div class="section-title"><div><h2>Score trend</h2><span class="text-muted">Last ${trend.length} main test${trend.length === 1 ? "" : "s"} · re-attempts excluded</span></div>${deltaHtml}</div>
+      ${
+        trend.length
+          ? chartTrendBars(barRows, { avgLine: chNum(summary.average_score) }) +
+            chartLegend([
+              { label: "Score %", color: "var(--brand)", round: true },
+              { label: "Latest test", color: "var(--brand-dark)", round: true },
+              { label: `Average ${chNum(summary.average_score)}%`, color: "var(--muted)", dashed: true },
+            ])
+          : `<div class="empty-state">Submit a test to start your trend.</div>`
+      }
+    </section>
+
     <div class="analytics-chart-grid">
-      <section class="card analytics-panel"><div class="section-title"><h2>Question outcomes</h2><span class="text-muted">${totalOutcome} answered</span></div><div class="outcome-chart-row"><div class="outcome-donut" style="--correct:${correctPct}%;--wrong:${wrongPct}%"><span>${Math.round(correctPct)}%</span></div><div class="outcome-legend"><span><i class="legend-dot correct"></i>Correct <b>${outcomes.correct || 0}</b></span><span><i class="legend-dot wrong"></i>Wrong <b>${outcomes.wrong || 0}</b></span><span><i class="legend-dot skipped"></i>Unattempted <b>${outcomes.unattempted || 0}</b></span></div></div></section>
-      <section class="card analytics-panel"><div class="section-title"><h2>Score trend</h2><span class="text-muted">Last ${trend.length} tests</span></div><div class="trend-chart">${trend.length ? trend.map((item) => `<div class="trend-column"><span>${Math.round(Number(item.percentage) || 0)}%</span><i style="height:${Math.max(8, ((Number(item.percentage) || 0) / trendMax) * 100)}%"></i><small>${formatDateTime(item.submitted_at).split(",")[0]}</small></div>`).join("") : `<div class="empty-state">Submit a test to start your trend.</div>`}</div></section>
-    </div>
-    <section class="card analytics-panel"><div class="section-title"><h2>Subject performance</h2><span class="text-muted">Correct answers by subject</span></div><div class="subject-performance-list">${subjects.length ? subjects.map((subject) => `<div class="subject-performance-row"><div class="subject-performance-label"><span>${subjectDot(subject.subject)}${escapeHtml(subject.subject)}</span><strong>${subject.correct_count || 0}/${subject.question_count || 0}</strong></div>${analyticsBar(subject.correct_count, subject.question_count, subjectColor(subject.subject))}<small>${subject.obtained || 0} / ${subject.total || 0} marks · ${subject.wrong_count || 0} wrong</small></div>`).join("") : `<div class="empty-state">Subject analytics will appear after your first submitted test.</div>`}</div></section>`;
+      <section class="card analytics-panel">
+        <div class="section-title"><h2>Question outcomes</h2><span class="text-muted">${totalOutcome} questions</span></div>
+        <div class="ch-donut-row">
+          ${chartDonut(
+            [
+              { value: correct, color: "var(--success)", label: "Correct" },
+              { value: wrong, color: "var(--danger)", label: "Wrong" },
+              { value: skipped, color: "var(--not-visited)", label: "Unattempted" },
+            ],
+            { centerValue: `${acc}%`, centerLabel: "accuracy" },
+          )}
+          ${outcomeLegend(correct, wrong, skipped)}
+        </div>
+      </section>
+      <section class="card analytics-panel">
+        <div class="section-title"><h2>Subject performance</h2><span class="text-muted">Outcomes by subject</span></div>
+        <div class="subject-performance-list">${subjectRowsHtml}</div>
+      </section>
+    </div>`;
 }
 
 async function enterAnalyticsView() {
@@ -4485,7 +5230,7 @@ function renderHistoryCards(history, targetId) {
     <article class="history-card">
       <div class="history-card-main">
         <div class="history-card-title">${escapeHtml(item.test_title)}</div>
-        <div class="history-card-meta">${categoryBadge(item.category)} · ${formatDateTime(item.submitted_at)} · ${item.status.replace("_", " ")}</div>
+        <div class="history-card-meta">${categoryBadge(item.category)} · ${formatDateTime(item.submitted_at)} · ${item.status.replace("_", " ")}${item.disqualified ? ' · <span class="status-tag dq-tag">Not ranked</span>' : ""}</div>
       </div>
       <div class="history-card-score"><strong>${item.percentage ?? 0}%</strong><span>${item.total_score} / ${item.total_marks}</span></div>
       <div class="history-card-stats"><span>${item.correct_count} correct</span><span>${item.wrong_count} wrong</span><span>${item.accuracy ?? 0}% accuracy</span></div>
@@ -4504,8 +5249,9 @@ async function renderAnalysisHistory() {
     target.innerHTML = `<div class="error-box">${escapeHtml(friendlyError(error))}</div>`;
     return;
   }
-  target.innerHTML = `<div class="section-title"><div><span class="eyebrow-label">Attempt history</span><h2>Every test report</h2></div><span class="text-muted">${(data || []).length} completed</span></div><div class="history-list" id="analysisHistoryList"></div>`;
-  renderHistoryCards(data || [], "analysisHistoryList");
+  const visible = (data || []).filter((item) => !item.disqualified);
+  target.innerHTML = `<div class="section-title"><div><span class="eyebrow-label">Attempt history</span><h2>Every test report</h2></div><span class="text-muted">${visible.length} completed</span></div><div class="history-list" id="analysisHistoryList"></div>`;
+  renderHistoryCards(visible, "analysisHistoryList");
 }
 
 async function enterGlobalLeaderboardView() {
@@ -5212,4 +5958,4 @@ function setupTheme() {
   applyTheme(savedTheme);
 
   setupThemeDrag();
-}
+} 

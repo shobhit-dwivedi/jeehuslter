@@ -476,7 +476,16 @@
 
         <div id="adminMainContent" style="display:none;">
 
-          <div class="card">
+          <div id="adminSummary" class="admin-summary" style="display:none;"></div>
+          <nav id="adminJump" class="admin-jump" aria-label="Jump to section" style="display:none;">
+            <button type="button" data-jump="detailsCard">Details</button>
+            <button type="button" data-jump="shareCard">Schedule</button>
+            <button type="button" data-jump="questionsCard">Questions</button>
+            <button type="button" data-jump="studentResultsCard">Results</button>
+            <button type="button" data-jump="reportsCard">Reports</button>
+          </nav>
+
+          <div class="card" id="detailsCard">
             <h2 style="font-size:16px;" id="detailsTitle">Test details</h2>
             <form id="testDetailsForm">
               <div class="field">
@@ -544,7 +553,16 @@
           </div>
 
           <div class="card admin-question-card" id="questionsCard" style="display:none;">
-            <h2 style="font-size:16px;">Add a question</h2>
+            <div class="section-title admin-section-head">
+              <div>
+                <h2 style="font-size:16px;">Add a question</h2>
+                <span id="questionCountTag" class="text-muted admin-count-tag"></span>
+              </div>
+              <div class="admin-toolbar">
+                <button type="button" class="btn btn-sm btn-primary" id="previewTestBtn">👁 Preview test</button>
+                <button type="button" class="btn btn-sm" id="printTestBtn">📄 Get questions PDF</button>
+              </div>
+            </div>
             <form id="questionForm" class="question-form">
               <div class="form-row">
                 <div class="field">
@@ -637,35 +655,49 @@
             </form>
           </div>
 
-          <div class="card" id="questionListCard" style="display:none;">
-            <div class="section-title">
-              <h2 style="font-size:16px;">Questions added</h2>
-              <div class="flex gap-8" style="align-items:center;">
-                <span id="questionCountTag" class="text-muted" style="font-size:13px;"></span>
-                <button type="button" class="btn btn-sm btn-primary" id="previewTestBtn">👁 Preview test</button>
-                <button type="button" class="btn btn-sm" id="printTestBtn">🖨 Print / PDF</button>
-              </div>
-            </div>
-            <div id="questionsList"></div>
-          </div>
-
           <div class="card" id="studentResultsCard" style="display:none;">
-            <div class="section-title">
-              <h2 style="font-size:16px;">Student Results</h2>
+            <div class="section-title admin-section-head">
+              <div>
+                <h2 style="font-size:16px;">Results &amp; leaderboard</h2>
+                <span class="text-muted admin-count-tag" id="resultsCountTag"></span>
+              </div>
               <div id="resultDeclarationStatus"></div>
             </div>
             <div id="resultDeclarationActions" class="result-declaration-actions"></div>
+
+            <div id="timeInsights"></div>
+
+            <div class="results-toolbar">
+              <input type="search" id="resultsSearch" placeholder="Search student…" aria-label="Search students" autocomplete="off">
+              <select id="resultsFilter" aria-label="Filter students">
+                <option value="all">All students</option>
+                <option value="flagged">Needs review (timing)</option>
+                <option value="dq">Disqualified</option>
+              </select>
+              <select id="resultsSort" aria-label="Sort students">
+                <option value="rank">Rank</option>
+                <option value="recent">Newest first</option>
+                <option value="score">Highest score</option>
+                <option value="fastest">Fastest finish</option>
+                <option value="slowest">Slowest finish</option>
+                <option value="name">Name A–Z</option>
+              </select>
+            </div>
+
             <div class="table-scroll">
-              <table class="report-table" id="studentResultsTable">
+              <table class="report-table results-table" id="studentResultsTable">
                 <thead>
                   <tr>
+                    <th>Rank</th>
                     <th>Student</th>
-                    <th>Status</th>
                     <th>Score</th>
                     <th>Correct</th>
                     <th>Wrong</th>
                     <th>Unanswered</th>
+                    <th>Percentile</th>
+                    <th>Time taken</th>
                     <th>Submitted At</th>
+                    <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody id="studentResultsBody"></tbody>
@@ -673,26 +705,8 @@
             </div>
           </div>
 
-          <div class="card" id="leaderboardCard" style="display:none;">
-            <h2 style="font-size:16px;">Leaderboard</h2>
-            <div class="table-scroll">
-              <table class="report-table" id="leaderboardTable">
-                <thead>
-                  <tr>
-                    <th>Rank</th>
-                    <th>Student</th>
-                    <th>Score</th>
-                    <th>Percentile</th>
-                    <th>Action</th>
-                  </tr>
-                </thead>
-                <tbody id="leaderboardBody"></tbody>
-              </table>
-            </div>
-          </div>
-
           <div class="card" id="reportsCard" style="display:none;">
-            <h2 style="font-size:16px;">Reported questions</h2>
+            <div class="section-title admin-section-head"><div><h2 style="font-size:16px;">Reported questions</h2><span class="text-muted admin-count-tag" id="reportsCountTag"></span></div></div>
             <div id="reportsList" class="text-muted">Loading reports…</div>
           </div>
 
@@ -1057,7 +1071,21 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
-  <script src="script.js"></script>
+  <div class="modal-backdrop" id="dqModal">
+  <div class="modal warning dq-modal" role="dialog" aria-modal="true" aria-labelledby="dqModalTitle">
+    <h3 id="dqModalTitle">Disqualify this attempt?</h3>
+    <p id="dqModalText"></p>
+    <label class="dq-label" for="dqReason">Reason <span class="text-muted">(optional — for your records only)</span></label>
+    <textarea id="dqReason" rows="3" maxlength="300" placeholder="e.g. Answered 90 questions in 12 minutes"></textarea>
+    <div class="modal-actions">
+      <button type="button" class="btn" id="dqCancelBtn">Cancel</button>
+      <button type="button" class="btn btn-danger" id="dqConfirmBtn">Disqualify</button>
+    </div>
+  </div>
+</div>
+
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+<script src="script.js"></script>
 </body> 
 
 </html>
