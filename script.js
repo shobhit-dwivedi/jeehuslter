@@ -598,21 +598,28 @@ function classifyTestWindow(test, nowMs = Date.now()) {
 }
 
 function mergeCatalogWithAttempts(catalog, attempts) {
-  const latestByTest = new Map();
+  // Every catalog row already says which attempt it stands for (a real
+  // attempt for the main card, one specific re-attempt for each practice
+  // card). Matching on that id means "View Report" can never open a
+  // practice report from the main card, or the other way round.
+  const byId = new Map();
+  const latestReal = new Map();
+  const latestPractice = new Map();
+  const newer = (x, y) => !y || new Date(x.started_at) > new Date(y.started_at);
 
   (attempts || []).forEach((a) => {
-    const existing = latestByTest.get(a.test_id);
-
-    if (!existing || new Date(a.started_at) > new Date(existing.started_at)) {
-      latestByTest.set(a.test_id, a);
-    }
+    byId.set(a.id, a);
+    const bucket = a.is_practice ? latestPractice : latestReal;
+    if (newer(a, bucket.get(a.test_id))) bucket.set(a.test_id, a);
   });
 
-  return (catalog || []).map((t) => ({
-    ...t,
-    myAttempt: latestByTest.get(t.id) || null,
-    windowState: classifyTestWindow(t),
-  }));
+  return (catalog || []).map((t) => {
+    let mine = t.attempt_id ? byId.get(t.attempt_id) || null : null;
+    if (!mine && !t.attempt_id) {
+      mine = (t.is_practice ? latestPractice : latestReal).get(t.id) || null;
+    }
+    return { ...t, myAttempt: mine, windowState: classifyTestWindow(t) };
+  });
 }
 function reminderKey(testId) {
   return `jh_reminder_${testId}`;
@@ -1040,8 +1047,113 @@ async function enterHomeView() {
   await renderHomeStats(merged, attempts || []);
 }
 
+let adminTestsCache = [];
+const adminTestsView = { q: "", status: "all" };
+
+// Locked = not published yet. Scheduled = published, opens later.
+// Live = inside its window. Closed = window is over.
+function adminTestState(t) {
+  const now = Date.now();
+  if (!t.is_published) return "locked";
+  if (t.available_from && now < new Date(t.available_from).getTime()) return "scheduled";
+  if (t.available_until && now >= new Date(t.available_until).getTime()) return "closed";
+  return "live";
+}
+const ADMIN_STATE_LABEL = { live: "Live", scheduled: "Scheduled", locked: "Locked", closed: "Closed" };
+
+function bindAdminTestsControls() {
+  const search = document.getElementById("adminTestsSearch");
+  if (!search || search.dataset.bound) return;
+  search.dataset.bound = "1";
+  search.addEventListener("input", (e) => {
+    adminTestsView.q = e.target.value;
+    renderAdminTests();
+  });
+  document.getElementById("adminStatusTabs").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-filter]");
+    if (!btn) return;
+    adminTestsView.status = btn.dataset.filter;
+    renderAdminTests();
+  });
+  document.getElementById("adminTestsList").addEventListener("click", (e) => {
+    const del = e.target.closest(".js-delete-test");
+    if (del) deleteTest(del.dataset.id);
+  });
+}
+
+function renderAdminTests() {
+  const list = document.getElementById("adminTestsList");
+  const tabs = document.getElementById("adminStatusTabs");
+  const overview = document.getElementById("adminOverview");
+  if (!list) return;
+
+  const count = (s) => adminTestsCache.filter((t) => t.state === s).length;
+  const submissions = adminTestsCache.reduce((s, t) => s + t.attempts, 0);
+  const tile = (label, value, sub = "") =>
+    `<div class="insight-tile"><span>${label}</span><strong>${value}</strong>${sub ? `<small>${sub}</small>` : ""}</div>`;
+  overview.innerHTML =
+    tile("Total tests", adminTestsCache.length, `${adminTestsCache.reduce((s, t) => s + t.questions, 0)} questions`) +
+    tile("Live now", count("live"), count("scheduled") ? `${count("scheduled")} scheduled` : "") +
+    tile("Locked", count("locked"), "Not published yet") +
+    tile("Submissions", submissions, `${count("closed")} test${count("closed") === 1 ? "" : "s"} closed`);
+
+  const filters = [
+    ["all", "All", adminTestsCache.length],
+    ["live", "Live", count("live")],
+    ["scheduled", "Scheduled", count("scheduled")],
+    ["locked", "Locked", count("locked")],
+    ["closed", "Closed", count("closed")],
+  ];
+  tabs.innerHTML = filters
+    .map(
+      ([key, label, n]) =>
+        `<button type="button" data-filter="${key}" class="${adminTestsView.status === key ? "active" : ""}">${label} <span class="seg-count">${n}</span></button>`,
+    )
+    .join("");
+
+  const needle = adminTestsView.q.trim().toLowerCase();
+  const rows = adminTestsCache.filter(
+    (t) =>
+      (adminTestsView.status === "all" || t.state === adminTestsView.status) &&
+      (!needle ||
+        (t.title || "").toLowerCase().includes(needle) ||
+        (t.category || "").toLowerCase().includes(needle)),
+  );
+  if (!rows.length) {
+    list.innerHTML = `<div class="empty-state">${adminTestsCache.length ? "No tests match this filter." : "No tests have been created yet."}</div>`;
+    return;
+  }
+  const when = (iso) =>
+    iso
+      ? new Date(iso).toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })
+      : "—";
+  list.innerHTML = rows
+    .map(
+      (t) => `
+    <article class="admin-test-card state-${t.state}">
+      <div class="atc-top">
+        <span class="state-pill ${t.state}">${ADMIN_STATE_LABEL[t.state]}</span>
+        ${categoryBadge(t.category)}
+      </div>
+      <h3 class="atc-title">${escapeHtml(t.title)}</h3>
+      <div class="atc-window"><div><span>Opens</span> ${when(t.available_from)}</div><div><span>Closes</span> ${when(t.available_until)}</div></div>
+      <div class="atc-stats">
+        <div><strong>${t.questions}</strong><span>Questions</span></div>
+        <div><strong>${t.attempts}</strong><span>Attempts</span></div>
+        <div><strong>${t.duration_minutes || "—"}<small>m</small></strong><span>Duration</span></div>
+      </div>
+      <div class="atc-actions">
+        <a class="btn btn-primary btn-sm" href="#/admin-test?test=${t.id}">Manage</a>
+        <button type="button" class="btn btn-sm btn-danger js-delete-test" data-id="${t.id}">Delete</button>
+      </div>
+    </article>`,
+    )
+    .join("");
+}
+
 async function loadAdminTests() {
   const list = document.getElementById("adminTestsList");
+  bindAdminTestsControls();
   const { data, error } = await sb
     .from("tests")
     .select("*")
@@ -1052,46 +1164,38 @@ async function loadAdminTests() {
     return;
   }
   if (!data || data.length === 0) {
-    list.innerHTML = `<div class="empty-state">No tests have been created yet.</div>`;
+    adminTestsCache = [];
+    renderAdminTests();
     return;
   }
 
-  const counts = await Promise.all(
-    data.map((t) =>
-      sb
-        .from("test_attempts")
-        .select("id", { count: "exact", head: true })
-        .eq("test_id", t.id)
-        .eq("is_practice", false),
+  const [attemptCounts, questionCounts] = await Promise.all([
+    Promise.all(
+      data.map((t) =>
+        sb
+          .from("test_attempts")
+          .select("id", { count: "exact", head: true })
+          .eq("test_id", t.id)
+          .eq("is_practice", false),
+      ),
     ),
-  );
+    Promise.all(
+      data.map((t) =>
+        sb
+          .from("questions")
+          .select("id", { count: "exact", head: true })
+          .eq("test_id", t.id),
+      ),
+    ),
+  ]);
 
-  list.innerHTML = data
-    .map((t, i) => {
-      const attemptCount = counts[i]?.count ?? 0;
-      return `
-      <div class="list-row">
-        <div class="list-row-main">
-          <div class="list-row-title">${escapeHtml(t.title)} ${categoryBadge(t.category)}</div>
-          <div class="list-row-meta">
-            <span class="status-tag ${t.is_published ? "published" : "draft"}">${t.is_published ? "Scheduled" : "Locked"}</span>
-            · ${attemptCount} attempt${attemptCount === 1 ? "" : "s"} · Duration ${t.duration_minutes}m
-          </div>
-        </div>
-        <div class="list-row-actions">
-          <a class="btn btn-primary btn-sm" href="#/admin-test?test=${t.id}">Manage</a>
-          <button class="btn btn-sm btn-danger js-delete-test" data-id="${t.id}">Delete</button>
-        </div>
-      </div>
-    `;
-    })
-    .join("");
-
-  list
-    .querySelectorAll(".js-delete-test")
-    .forEach((btn) =>
-      btn.addEventListener("click", () => deleteTest(btn.dataset.id)),
-    );
+  adminTestsCache = data.map((t, i) => ({
+    ...t,
+    state: adminTestState(t),
+    attempts: attemptCounts[i]?.count ?? 0,
+    questions: questionCounts[i]?.count ?? 0,
+  }));
+  renderAdminTests();
 }
 
 async function deleteTest(id) {
@@ -2019,6 +2123,10 @@ function printMarkingSchemeSummary(list) {
 // question + options only, no one's answers — followed by an answer key.
 // `questions` items need: subject, question_type, question_text, image_url,
 // options, positive_marks, negative_marks, correct_option, correct_integer_value.
+// Returns an ordered list of layout blocks — {html, keepNext?, breakBefore?}.
+// openPrintPreview() measures them and lays them onto separate A4 pages, so a
+// question is never cut in half and a subject heading is never left alone at
+// the bottom of a page.
 function buildPrintPaperHtml(questions, meta) {
   const SUBJECT_ORDER = ["Physics", "Chemistry", "Mathematics", "Biology"];
   const subjectRank = (name) => {
@@ -2041,53 +2149,10 @@ function buildPrintPaperHtml(questions, meta) {
       .map((x) => x.q);
   });
 
-  // Continuous numbering across the whole paper so the answer key at the
-  // end can reference each question "in proper sequence" by that number.
-  let n = 0;
-  const answerKey = [];
-  const sectionsHtml = subjectNames
-    .map((subject) => {
-      const rows = groups[subject]
-        .map((q) => {
-          n += 1;
-          const ans =
-            q.question_type === "mcq"
-              ? q.correct_option || "—"
-              : (q.correct_integer_value ?? "—");
-          answerKey.push({ n, ans });
-          const body =
-            q.question_type === "mcq"
-              ? `<div class="print-options">${(q.options || [])
-                  .map(
-                    (o) =>
-                      `<div class="print-option"><span class="print-option-mark"></span>${escapeHtml(o.id)}. ${escapeHtml(o.text || "")}</div>`,
-                  )
-                  .join("")}</div>`
-              : `<div class="print-integer-line">Answer: __________</div>`;
-          return `
-        <div class="print-question">
-          <div class="print-question-head">Q${n}. <span class="print-marks">[+${q.positive_marks} / -${q.negative_marks}]</span></div>
-          <div class="print-question-text">${escapeHtml(q.question_text)}</div>
-          ${questionImageHtml(q.image_url)}
-          ${body}
-        </div>`;
-        })
-        .join("");
-      return `<div class="print-subject-section"><h3>${escapeHtml(subject)}</h3>${rows}</div>`;
-    })
-    .join("");
-
-  const answerKeyHtml = `
-    <div class="print-answer-key">
-      <h3>Answer Key</h3>
-      <div class="print-answer-grid">
-        ${answerKey.map((a) => `<div class="print-answer-cell"><b>${a.n}.</b> ${escapeHtml(String(a.ans))}</div>`).join("")}
-      </div>
-    </div>`;
-
   const marking = printMarkingSchemeSummary(questions);
-
-  return `
+  const blocks = [
+    {
+      html: `
     <div class="print-promo">JEE Hustlers — practice smart, score high.</div>
     <h1 class="print-title">${escapeHtml(meta.title || "Test")}</h1>
     <div class="print-meta-row">
@@ -2095,43 +2160,185 @@ function buildPrintPaperHtml(questions, meta) {
       <span><b>Syllabus:</b> ${escapeHtml(subjectNames.join(", "))}</span>
       <span><b>Marking scheme:</b> ${escapeHtml(marking)}</span>
     </div>
-    <hr>
-    ${sectionsHtml}
-    <div class="print-page-break"></div>
-    ${answerKeyHtml}
-  `;
+    <hr>`,
+    },
+  ];
+
+  // Continuous numbering across the whole paper so the answer key at the end
+  // can reference each question "in proper sequence" by that number.
+  let n = 0;
+  const answerKey = [];
+  subjectNames.forEach((subject) => {
+    blocks.push({
+      html: `<h3 class="print-subject-title">${escapeHtml(subject)}</h3>`,
+      keepNext: true,
+    });
+    groups[subject].forEach((q) => {
+      n += 1;
+      const ans =
+        q.question_type === "mcq"
+          ? q.correct_option || "—"
+          : (q.correct_integer_value ?? "—");
+      answerKey.push({ n, ans });
+      const body =
+        q.question_type === "mcq"
+          ? `<div class="print-options">${(q.options || [])
+              .map(
+                (o) =>
+                  `<div class="print-option"><span class="print-option-mark"></span>${escapeHtml(o.id)}. ${escapeHtml(o.text || "")}</div>`,
+              )
+              .join("")}</div>`
+          : `<div class="print-integer-line">Answer: __________</div>`;
+      blocks.push({
+        html: `
+        <div class="print-question">
+          <div class="print-question-head">Q${n}. <span class="print-marks">[+${q.positive_marks} / -${q.negative_marks}]</span></div>
+          <div class="print-question-text">${escapeHtml(q.question_text)}</div>
+          ${questionImageHtml(q.image_url)}
+          ${body}
+        </div>`,
+      });
+    });
+  });
+
+  // Answer key always starts on a fresh page; very long keys continue on more.
+  const PER_BLOCK = 66;
+  for (let i = 0; i < answerKey.length; i += PER_BLOCK) {
+    const cells = answerKey
+      .slice(i, i + PER_BLOCK)
+      .map((a) => `<div class="print-answer-cell"><b>${a.n}.</b> ${escapeHtml(String(a.ans))}</div>`)
+      .join("");
+    blocks.push({
+      html: `${i === 0 ? '<h3 class="print-key-title">Answer Key</h3>' : ""}<div class="print-answer-grid">${cells}</div>`,
+      breakBefore: i === 0,
+    });
+  }
+  return blocks;
+}
+
+// ---- pagination ----
+const PAPER = { W: 794, H: 1122, T: 46, B: 62, X: 52 }; // A4 @ 96dpi, in px
+let printPreviewState = null;
+
+async function waitForPaperAssets(root) {
+  const imgs = [...root.querySelectorAll("img")].filter((i) => !i.complete);
+  await Promise.all(
+    imgs.map(
+      (img) =>
+        new Promise((res) => {
+          img.addEventListener("load", res, { once: true });
+          img.addEventListener("error", res, { once: true });
+          setTimeout(res, 4000);
+        }),
+    ),
+  );
+  if (document.fonts?.ready)
+    await Promise.race([document.fonts.ready, new Promise((r) => setTimeout(r, 1500))]);
+}
+
+function packPaperPages(items, bodyH) {
+  const pages = [[]];
+  let used = 0;
+  for (let i = 0; i < items.length; ) {
+    let j = i;
+    let h = items[i].h;
+    while (items[j].keepNext && j + 1 < items.length) {
+      j += 1;
+      h += items[j].h;
+    }
+    const current = pages[pages.length - 1];
+    if (current.length && (items[i].breakBefore || used + h > bodyH)) {
+      pages.push([]);
+      used = 0;
+    }
+    for (let k = i; k <= j; k++) pages[pages.length - 1].push(items[k].html);
+    used += h;
+    i = j + 1;
+  }
+  return pages;
+}
+
+async function paginatePaper(blocks) {
+  const measure = document.createElement("div");
+  measure.className = "print-measure";
+  measure.style.width = `${PAPER.W - PAPER.X * 2}px`;
+  measure.innerHTML = blocks.map((b) => `<div class="print-block">${b.html}</div>`).join("");
+  document.body.appendChild(measure);
+  try {
+    renderMath(measure); // maths first — it changes the heights
+    await waitForPaperAssets(measure);
+    const els = [...measure.children];
+    const items = blocks.map((b, i) => ({
+      html: els[i].innerHTML,
+      h: els[i].getBoundingClientRect().height,
+      keepNext: !!b.keepNext,
+      breakBefore: !!b.breakBefore,
+    }));
+    return packPaperPages(items, PAPER.H - PAPER.T - PAPER.B - 6);
+  } finally {
+    measure.remove();
+  }
+}
+
+function paperPagesHtml(pages, title, { wrap }) {
+  return pages
+    .map((p, i) => {
+      const sheet = `<section class="print-page ${i > 0 ? "print-page-next" : ""}" aria-label="Page ${i + 1} of ${pages.length}">
+        <div class="print-page-body">${p.join("")}</div>
+        <div class="print-page-foot"><span>${escapeHtml(title || "")}</span><span>Page ${i + 1} of ${pages.length}</span></div>
+      </section>`;
+      return wrap ? `<div class="print-page-wrap">${sheet}</div>` : sheet;
+    })
+    .join("");
 }
 
 // Renders the paper once, on screen, inside a closable preview — nothing is
 // sent to the printer until the student/admin explicitly clicks Download.
-function openPrintPreview(paperHtml, title) {
+async function openPrintPreview(blocks, title) {
   document.getElementById("printPreviewOverlay")?.remove();
   const overlay = document.createElement("div");
   overlay.id = "printPreviewOverlay";
   overlay.innerHTML = `
     <div class="print-preview-toolbar">
-      <span class="print-preview-label">📄 ${escapeHtml(title || "Question paper")}</span>
+      <span class="print-preview-label">📄 ${escapeHtml(title || "Question paper")}<span class="print-pages-count" id="printPagesCount"></span></span>
       <div class="print-preview-actions">
-        <button type="button" class="btn btn-sm btn-primary" id="printDownloadBtn">⬇ Download now</button>
+        <button type="button" class="btn btn-sm btn-primary" id="printDownloadBtn" disabled>⬇ Download now</button>
         <button type="button" class="btn btn-sm" id="printCloseBtn">✕ Close</button>
       </div>
     </div>
-    <div class="print-preview-scroll">
-      <div class="print-paper" id="printPaperArea">${paperHtml}</div>
+    <div class="print-preview-scroll" id="printPreviewScroll">
+      <div class="empty-state print-loading">Preparing pages…</div>
     </div>
   `;
   document.body.appendChild(overlay);
   document.body.classList.add("print-preview-open");
-  renderMath(overlay);
 
+  const scroll = overlay.querySelector("#printPreviewScroll");
+  const fit = () => {
+    const scale = Math.min(1, (scroll.clientWidth - 24) / PAPER.W);
+    scroll.style.setProperty("--pp-scale", String(Math.max(0.3, scale)));
+  };
   const close = () => {
+    window.removeEventListener("resize", fit);
     overlay.remove();
+    printPreviewState = null;
     document.body.classList.remove("print-preview-open");
   };
   overlay.querySelector("#printCloseBtn").addEventListener("click", close);
-  overlay
-    .querySelector("#printDownloadBtn")
-    .addEventListener("click", (e) => downloadPaperPdf(title, e.currentTarget));
+
+  const pages = await paginatePaper(blocks);
+  if (!document.body.contains(overlay)) return; // closed while preparing
+
+  printPreviewState = { pages, title };
+  scroll.innerHTML = paperPagesHtml(pages, title, { wrap: true });
+  overlay.querySelector("#printPagesCount").textContent =
+    `${pages.length} page${pages.length === 1 ? "" : "s"}`;
+  fit();
+  window.addEventListener("resize", fit);
+
+  const dl = overlay.querySelector("#printDownloadBtn");
+  dl.disabled = false;
+  dl.addEventListener("click", (e) => downloadPaperPdf(title, e.currentTarget));
 }
 
 // One click, one file: renders the previewed paper to a real PDF and saves it
@@ -2140,8 +2347,8 @@ function openPrintPreview(paperHtml, title) {
 // and on phones. Falls back to the browser print dialog only if the PDF
 // library could not be loaded.
 async function downloadPaperPdf(title, button) {
-  const src = document.getElementById("printPaperArea");
-  if (!src) return;
+  const state = printPreviewState;
+  if (!state?.pages?.length) return;
   if (typeof window.html2pdf !== "function") {
     toast("PDF engine unavailable — opening the print dialog instead. Choose “Save as PDF”.", "error");
     window.print();
@@ -2152,12 +2359,14 @@ async function downloadPaperPdf(title, button) {
     button.disabled = true;
     button.textContent = "Preparing PDF…";
   }
+  // The same fixed A4 pages shown in the preview are rebuilt off-screen at
+  // full size (no zoom), one page per PDF page.
   const host = document.createElement("div");
   host.className = "pdf-export-host";
-  const clone = src.cloneNode(true);
-  clone.removeAttribute("id");
-  clone.classList.add("pdf-export-paper");
-  host.appendChild(clone);
+  const root = document.createElement("div");
+  root.className = "print-export-pages";
+  root.innerHTML = paperPagesHtml(state.pages, state.title, { wrap: false });
+  host.appendChild(root);
   document.body.appendChild(host);
   const slug =
     String(title || "question-paper")
@@ -2168,18 +2377,21 @@ async function downloadPaperPdf(title, button) {
     await window
       .html2pdf()
       .set({
-        margin: [10, 10, 12, 10],
+        margin: 0,
         filename: `${slug}-questions.pdf`,
         image: { type: "jpeg", quality: 0.96 },
-        html2canvas: { scale: 2, useCORS: true, backgroundColor: "#ffffff", scrollY: 0 },
-        jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-        pagebreak: {
-          mode: ["css", "legacy"],
-          avoid: [".print-question", ".print-answer-cell"],
-          before: ".print-page-break",
+        html2canvas: {
+          scale: 2,
+          useCORS: true,
+          backgroundColor: "#ffffff",
+          windowWidth: PAPER.W,
+          scrollX: 0,
+          scrollY: 0,
         },
+        jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+        pagebreak: { mode: ["css"], before: ".print-page-next" },
       })
-      .from(clone)
+      .from(root)
       .save();
     toast("Your PDF has been downloaded", "success");
   } catch (err) {
@@ -2193,22 +2405,6 @@ async function downloadPaperPdf(title, button) {
     }
   }
 }
-
-function openTestPrint() {
-  if (!adminQuestionsCache.length) {
-    toast("Add at least one question before printing the test.", "error");
-    return;
-  }
-  const paperHtml = buildPrintPaperHtml(adminQuestionsCache, {
-    title: currentTest?.title,
-    durationMinutes: currentTest?.duration_minutes,
-  });
-  openPrintPreview(paperHtml, currentTest?.title);
-}
-
-document.addEventListener("click", (e) => {
-  if (e.target.closest("#printTestBtn")) openTestPrint();
-});
 
 // Student-side: blank paper + answer key for a submitted test. Triggered from
 // the "Print PDF" button on the dashboard / tests card, never from the report.
@@ -2468,6 +2664,17 @@ function resultDetailHtml(r) {
     </div>`;
 }
 
+// The expanded "time" panel sits inside the table, so it is pinned to the
+// left edge and given the visible width — it stays readable while the table
+// scrolls sideways.
+function syncResultsScrollWidth() {
+  const scroller = document
+    .getElementById("studentResultsTable")
+    ?.closest(".table-scroll");
+  if (scroller) scroller.style.setProperty("--scroll-w", `${scroller.clientWidth}px`);
+}
+window.addEventListener("resize", syncResultsScrollWidth);
+
 function formatShortDateTime(iso) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
@@ -2506,6 +2713,7 @@ function renderStudentResultsTable() {
     return;
   }
 
+  syncResultsScrollWidth();
   body.innerHTML = rows
     .map((r) => {
       const dq = !!r.disqualified_at;
@@ -2530,7 +2738,7 @@ function renderStudentResultsTable() {
       return `
       <tr class="result-row ${dq ? "row-dq" : ""} ${open ? "row-open" : ""} ${dq ? "" : rankRowClass(r.rnk)}">
         <td data-label="Rank" class="rank-td">${rankCell}</td>
-        <td data-label="Student" class="student-td"><div class="student-cell"><strong>${escapeHtml(r.full_name || "Student")}</strong><div class="student-tags">${dq ? `<span class="status-tag dq-tag">Disqualified</span>` : ""}<span class="status-tag ${r.status}">${r.status.replace("_", " ")}</span></div></div></td>
+        <td data-label="Student" class="student-td"><div class="student-cell"><strong>${escapeHtml(String(r.full_name || "").trim())}</strong><div class="student-tags">${dq ? `<span class="status-tag dq-tag">Disqualified</span>` : ""}<span class="status-tag ${r.status}">${r.status.replace("_", " ")}</span></div></div></td>
         <td data-label="Score"><strong>${r.total_score}</strong><small class="text-muted"> / ${r.total_marks}</small></td>
         <td data-label="Correct" class="num c-ok">${r.correct_count}</td>
         <td data-label="Wrong" class="num c-bad">${r.wrong_count}</td>
@@ -3989,54 +4197,35 @@ function chartLegend(items) {
     .join("")}</div>`;
 }
 
-/* Bar graph of percentages (0-100). rows: [{label, value, tip, latest}] */
-function chartTrendBars(rows, { avgLine = null, height = 300 } = {}) {
-  const n = rows.length;
-  const W = Math.max(820, n * 76 + 100);
-  const H = height;
-  const pl = 46;
-  const pr = 22;
-  const pt = 28;
-  const pb = 44;
-  const iw = W - pl - pr;
-  const ih = H - pt - pb;
-  const slot = iw / n;
-  const bw = Math.max(14, Math.min(52, slot * 0.56));
-  const y = (v) => pt + ih - (chClamp(v, 0, 100) / 100) * ih;
-
-  const grid = [0, 25, 50, 75, 100]
+/* Compact bar graph of percentages (0-100). Pure HTML/CSS so it always fits
+   its card — no horizontal scrolling on desktop or phones.
+   rows: [{label, sub, value, tip, latest}] */
+function chartTrendBars(rows, { avgLine = null } = {}) {
+  const gridLines = [0, 25, 50, 75, 100]
+    .map((g) => `<i style="bottom:${g}%"></i>`)
+    .join("");
+  const axis = [100, 75, 50, 25, 0].map((g) => `<span>${g}%</span>`).join("");
+  const cols = rows
     .map(
-      (g) =>
-        `<line class="ch-grid" x1="${pl}" x2="${W - pr}" y1="${y(g)}" y2="${y(g)}"/>` +
-        `<text class="ch-tick" x="${pl - 10}" y="${y(g) + 4}" text-anchor="end">${g}%</text>`,
+      (r) => `<div class="tb-col" title="${escapeHtml(r.tip || "")}" style="--v:${chClamp(r.value, 0, 100)}">
+        <span class="tb-val">${Math.round(r.value)}%</span>
+        <div class="tb-bar ${r.latest ? "latest" : ""}"></div>
+      </div>`,
     )
     .join("");
-
-  const bars = rows
-    .map((r, i) => {
-      const cx = pl + slot * i + slot / 2;
-      const top = y(r.value);
-      const h = Math.max(r.value > 0 ? 3 : 0, pt + ih - top);
-      const bx = cx - bw / 2;
-      const rad = Math.min(8, bw / 2, h);
-      // rounded top corners only
-      const d = `M${bx},${pt + ih} V${pt + ih - h + rad} Q${bx},${pt + ih - h} ${bx + rad},${pt + ih - h} H${bx + bw - rad} Q${bx + bw},${pt + ih - h} ${bx + bw},${pt + ih - h + rad} V${pt + ih} Z`;
-      return (
-        `<path class="ch-bar-score ${r.latest ? "latest" : ""}" d="${d}"><title>${escapeHtml(r.tip || "")}</title></path>` +
-        `<text class="ch-value" x="${cx}" y="${pt + ih - h - 8}" text-anchor="middle">${Math.round(r.value)}%</text>` +
-        `<text class="ch-tick" x="${cx}" y="${H - pb + 22}" text-anchor="middle">${escapeHtml(r.label)}</text>`
-      );
-    })
+  const labels = rows
+    .map((r) => `<span><b>${escapeHtml(r.label)}</b>${escapeHtml(r.sub || "")}</span>`)
     .join("");
-
-  const avg =
-    avgLine !== null
-      ? `<line class="ch-avg" x1="${pl}" x2="${W - pr}" y1="${y(avgLine)}" y2="${y(avgLine)}"/>`
-      : "";
-
-  return `<div class="ch-scroll"><svg class="ch-svg" viewBox="0 0 ${W} ${H}" style="min-width:${Math.min(W, 900)}px" role="img" aria-label="Score trend bar chart">
-    ${grid}${bars}${avg}
-  </svg></div>`;
+  return `<div class="tb-chart" role="img" aria-label="Score trend bar chart">
+    <div class="tb-axis">${axis}</div>
+    <div class="tb-plot">
+      <div class="tb-grid">${gridLines}</div>
+      ${avgLine !== null ? `<div class="tb-avg" style="--a:${chClamp(avgLine, 0, 100)}"></div>` : ""}
+      <div class="tb-bars">${cols}</div>
+    </div>
+    <div class="tb-spacer"></div>
+    <div class="tb-labels">${labels}</div>
+  </div>`;
 }
 
 /* Donut. segments: [{value,color,label}] */
@@ -4613,7 +4802,7 @@ async function enterResultView() {
     ${report.is_owner || report.is_public_top3 ? `<div class="card report-review-cta"><div><span class="eyebrow-label">Detailed review</span><h2>Review every answer</h2><p class="text-muted">Open the exam-style review to see selected answers, correct answers, explanations, and question status.</p></div><a class="btn btn-primary" href="#/review?attempt=${encodeURIComponent(attemptIdParam)}">Review answers</a></div>` : ""}
 
     <div class="card">
-      <h2 style="font-size:16px;">Leaderboard</h2>
+      <h2 style="font-size:16px;">Top 10</h2>
       ${
         isPractice
           ? `<div class="empty-state">Practice re-attempts don't appear on the leaderboard. Your real attempt's rank and percentile are on that report.</div>`
@@ -5109,7 +5298,8 @@ function renderAnalyticsCharts(data) {
   const acc = correct + wrong ? Math.round((correct / (correct + wrong)) * 100) : 0;
 
   const barRows = trend.map((t, i) => ({
-    label: chShortDate(t.submitted_at),
+    label: new Date(t.submitted_at).getDate(),
+    sub: new Date(t.submitted_at).toLocaleDateString(undefined, { month: "short" }),
     value: chNum(t.percentage),
     latest: i === trend.length - 1,
     tip: `${t.title} · ${chShortDate(t.submitted_at)} — ${t.total_score}/${t.total_marks} (${chNum(t.percentage)}%)${t.accuracy === null || t.accuracy === undefined ? "" : " · accuracy " + chNum(t.accuracy) + "%"}`,
@@ -5254,6 +5444,12 @@ async function renderAnalysisHistory() {
   renderHistoryCards(visible, "analysisHistoryList");
 }
 
+// Best score is shown to three decimals (e.g. 68.333%).
+function fmtBestScore(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? `${n.toFixed(3)}%` : "—";
+}
+
 async function enterGlobalLeaderboardView() {
   const content = document.getElementById("leaderboardContent");
   content.innerHTML = `<div class="empty-state">Loading leaderboard…</div>`;
@@ -5289,7 +5485,7 @@ async function enterGlobalLeaderboardView() {
         <td>${row.tests_completed}</td>
         <td>${row.average_score}%</td>
         <td>${row.average_accuracy}%</td>
-        <td>${row.best_score}%</td>
+        <td>${fmtBestScore(row.best_score)}</td>
         <td>${formatDurationPrecise(row.total_time_seconds)}</td>
       </tr>`,
     )
@@ -5303,7 +5499,7 @@ async function enterGlobalLeaderboardView() {
       <p style="font-size:14px;">
         Rank: #${myRow.rnk} &nbsp;·&nbsp; Tests: ${myRow.tests_completed} &nbsp;·&nbsp;
         Average score: ${myRow.average_score}% &nbsp;·&nbsp; Accuracy: ${myRow.average_accuracy}% &nbsp;·&nbsp;
-        Best score: ${myRow.best_score}% &nbsp;·&nbsp; Total time: ${formatDurationPrecise(myRow.total_time_seconds)}
+        Best score: ${fmtBestScore(myRow.best_score)} &nbsp;·&nbsp; Total time: ${formatDurationPrecise(myRow.total_time_seconds)}
       </p>
     </div>`
       : "";
@@ -5958,4 +6154,4 @@ function setupTheme() {
   applyTheme(savedTheme);
 
   setupThemeDrag();
-} 
+}

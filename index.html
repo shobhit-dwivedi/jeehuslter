@@ -414,14 +414,30 @@
           </div>
         </section>
 
-        <section id="adminSection" class="mt-16" style="display:none;">
-          <div class="section-title">
-            <h2>All tests</h2>
-            <div class="flex gap-8">
-              <a href="#/bulk-import" class="btn btn-sm">Bulk import</a>
+        <section id="adminSection" class="mt-16 admin-home" style="display:none;">
+          <div class="admin-hero">
+            <div>
+              <span class="eyebrow-label">Admin panel</span>
+              <h2>Manage your tests</h2>
+              <p class="text-muted">Create tests, track submissions, review results and handle reported questions.</p>
+            </div>
+            <div class="admin-hero-actions">
+              <a href="#/bulk-import" class="btn btn-sm">⬆ Bulk import</a>
               <a href="#/admin-test" class="btn btn-primary btn-sm">+ Create new test</a>
+            </div>
           </div>
-          <div id="adminTestsList">
+
+          <div id="adminOverview" class="admin-summary"></div>
+
+          <div class="tests-toolbar admin-tests-toolbar">
+            <div class="tests-search">
+              <span class="tests-search-icon">🔍</span>
+              <input type="search" id="adminTestsSearch" placeholder="Search tests…" autocomplete="off">
+            </div>
+            <div class="segmented tests-status-tabs" id="adminStatusTabs"></div>
+          </div>
+
+          <div id="adminTestsList" class="admin-test-grid">
             <div class="empty-state">Loading…</div>
           </div>
         </section>
@@ -975,7 +991,7 @@
     <div class="page-body">
       <div class="container leaderboard-container">
         <div class="section-title analytics-heading">
-          <div><span class="eyebrow-label">Across all declared tests</span><h1>Global leaderboard</h1><p class="text-muted">Ranked by average score across completed tests.</p></div>
+          <div><h1>Top 10</h1><p class="text-muted">Ranked by average score across completed tests.</p></div>
         </div>
         <div id="leaderboardContent"><div class="empty-state">Loading leaderboard…</div></div>
         <footer class="app-footer">
