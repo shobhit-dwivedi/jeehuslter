@@ -255,6 +255,10 @@
               </div>
             </div>
             <button type="submit" class="btn btn-primary btn-block" id="loginBtn">Log in</button>
+            <div class="auth-divider"><span>or</span></div>
+            <button type="button" class="btn btn-google btn-block" id="loginGoogleBtn">
+              <img class="google-mark" src="Google_logo.webp" alt="" aria-hidden="true"> Continue with Google
+            </button>
           </form>
 
           <form id="signupForm" style="display:none">
@@ -276,11 +280,11 @@
               <div class="hint">At least 6 characters.</div>
             </div>
             <button type="submit" class="btn btn-primary btn-block" id="signupBtn">Create account</button>
+            <div class="auth-divider"><span>or</span></div>
+            <button type="button" class="btn btn-google btn-block" id="signupGoogleBtn">
+              <img class="google-mark" src="Google_logo.webp" alt="" aria-hidden="true"> Register with Google
+            </button>
           </form>
-
-          <p class="helper-text mt-16">
-            New student? Register first
-          </p>
         </div>
       </div>
     </div>
@@ -1085,6 +1089,15 @@
   </div> 
  
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
+  <script>
+    window.OneSignalDeferred = window.OneSignalDeferred || [];
+    OneSignalDeferred.push(async function (OneSignal) {
+      await OneSignal.init({
+        appId: "d10d5489-441b-47ea-8f90-0bff543e0773",
+      });
+    });
+  </script>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
   <div class="modal-backdrop" id="dqModal">

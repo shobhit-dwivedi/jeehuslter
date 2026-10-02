@@ -721,6 +721,52 @@ input[type="date"]::-webkit-datetime-edit {
   border-color: #f97316;
 }
 
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 18px 0;
+  color: #9a6b22;
+  font-size: 12px;
+}
+
+.auth-divider::before,
+.auth-divider::after {
+  content: "";
+  height: 1px;
+  flex: 1;
+  background: #f3d89a;
+}
+
+.auth-divider span {
+  flex: 0 0 auto;
+}
+
+.btn-google {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  background: #fff;
+  color: #3c4043;
+  border: 1px solid #dadce0;
+  box-shadow: 0 1px 2px rgba(60, 64, 67, 0.12);
+}
+
+.btn-google:hover,
+.btn-google:focus-visible {
+  background: #f8faff;
+  border-color: #b8c7e6;
+  color: #202124;
+}
+
+.google-mark {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  object-fit: contain;
+}
+
 @media (min-width: 880px) {
   .auth-brand {
     display: flex;

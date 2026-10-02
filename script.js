@@ -395,6 +395,8 @@ function setupAuthListeners() {
   const loginForm = document.getElementById("loginForm");
   const signupForm = document.getElementById("signupForm");
   const authMessage = document.getElementById("authMessage");
+  const loginGoogleBtn = document.getElementById("loginGoogleBtn");
+  const signupGoogleBtn = document.getElementById("signupGoogleBtn");
 
   document.querySelectorAll(".password-toggle").forEach((btn) =>
     btn.addEventListener("click", () => {
@@ -430,6 +432,104 @@ function setupAuthListeners() {
   function setMessage(html, kind) {
     authMessage.innerHTML = `<div class="${kind === "error" ? "error-box" : "success-box"}">${html}</div>`;
   }
+
+  function setGoogleButtonState(button, busy) {
+    button.disabled = busy;
+    button.innerHTML = busy
+      ? "Connecting to Google…"
+      : '<img class="google-mark" src="Google_logo.webp" alt="" aria-hidden="true"> ' +
+        (button === loginGoogleBtn
+          ? "Continue with Google"
+          : "Register with Google");
+  }
+
+  async function startGoogleSignIn() {
+    const { error } = await sb.auth.signInWithOAuth({
+      provider: "google",
+      options: {
+        redirectTo: `${window.location.origin}${window.location.pathname}`,
+        queryParams: { prompt: "select_account" },
+      },
+    });
+    if (error) {
+      setMessage(escapeHtml(friendlyError(error)), "error");
+      return false;
+    }
+    return true;
+  }
+
+  async function linkGoogleIdentity() {
+    const { data: sessionData } = await sb.auth.getSession();
+    if (!sessionData.session) {
+      setMessage(
+        "Please enter your email and password first. We verify the password before linking Google so no account can be merged using email alone.",
+        "error",
+      );
+      return false;
+    }
+
+    const { data: userData, error: userError } = await sb.auth.getUser();
+    if (userError) {
+      setMessage(escapeHtml(friendlyError(userError)), "error");
+      return false;
+    }
+    const googleAlreadyLinked = userData.user?.identities?.some(
+      (identity) => identity.provider === "google",
+    );
+    if (googleAlreadyLinked) {
+      await sb.auth.signOut();
+      return startGoogleSignIn();
+    }
+
+    const { error } = await sb.auth.linkIdentity({
+      provider: "google",
+      options: {
+        redirectTo: `${window.location.origin}${window.location.pathname}`,
+        queryParams: { prompt: "select_account" },
+      },
+    });
+    if (error) {
+      setMessage(
+        escapeHtml(
+          error.message?.includes("already linked") ||
+            error.message?.includes("already exists")
+            ? "That Google account is already linked to a different Test Series account. Log in to that account instead; accounts are never merged automatically."
+            : friendlyError(error),
+        ),
+        "error",
+      );
+      return false;
+    }
+    return true;
+  }
+
+  async function handleLoginGoogle() {
+    await startGoogleSignIn();
+  }
+
+  async function handleSignupGoogle() {
+    await startGoogleSignIn();
+  }
+
+  loginGoogleBtn.addEventListener("click", async () => {
+    setGoogleButtonState(loginGoogleBtn, true);
+    authMessage.innerHTML = "";
+    try {
+      await handleLoginGoogle();
+    } finally {
+      setGoogleButtonState(loginGoogleBtn, false);
+    }
+  });
+
+  signupGoogleBtn.addEventListener("click", async () => {
+    setGoogleButtonState(signupGoogleBtn, true);
+    authMessage.innerHTML = "";
+    try {
+      await handleSignupGoogle();
+    } finally {
+      setGoogleButtonState(signupGoogleBtn, false);
+    }
+  });
 
   loginForm.addEventListener("submit", async (e) => {
     e.preventDefault();
