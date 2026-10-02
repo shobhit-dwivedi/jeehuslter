@@ -8,6 +8,7 @@ const SUPABASE_ANON_KEY =
 
 const { createClient } = supabase;
 const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const PRODUCTION_APP_URL = "https://jeehustlers.netlify.app";
 
 /* =========================================================================
    1. SMALL SHARED HELPERS
@@ -264,6 +265,12 @@ function navigate(pathWithQuery) {
   window.location.hash = pathWithQuery;
 }
 
+function redirectToProductionApp() {
+  if (window.location.origin !== PRODUCTION_APP_URL) {
+    window.location.replace(`${PRODUCTION_APP_URL}${window.location.pathname}`);
+  }
+}
+
 function qs(name) {
   return currentRoute.params.get(name);
 }
@@ -382,10 +389,25 @@ async function router() {
 }
 
 window.addEventListener("hashchange", router);
-sb.auth.onAuthStateChange(() => {
+sb.auth.onAuthStateChange(async (event, session) => {
   router();
-});
 
+  if (
+    session?.user &&
+    (event === "SIGNED_IN" || event === "INITIAL_SESSION")
+  ) {
+    try {
+      if (
+        typeof OneSignal !== "undefined" &&
+        Notification.permission === "default"
+      ) {
+        await OneSignal.Slidedown.promptPush();
+      }
+    } catch (error) {
+      console.warn("OneSignal login prompt failed:", error);
+    }
+  }
+});
 /* =========================================================================
    3. AUTH VIEW
    ========================================================================= */
@@ -447,7 +469,7 @@ function setupAuthListeners() {
     const { error } = await sb.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo: `${window.location.origin}${window.location.pathname}`,
+        redirectTo: `${PRODUCTION_APP_URL}${window.location.pathname}`,
         queryParams: { prompt: "select_account" },
       },
     });
@@ -484,7 +506,7 @@ function setupAuthListeners() {
     const { error } = await sb.auth.linkIdentity({
       provider: "google",
       options: {
-        redirectTo: `${window.location.origin}${window.location.pathname}`,
+        redirectTo: `${PRODUCTION_APP_URL}${window.location.pathname}`,
         queryParams: { prompt: "select_account" },
       },
     });
@@ -550,7 +572,7 @@ function setupAuthListeners() {
     }
     btn.disabled = false;
     btn.textContent = "Log in";
-    navigate("/dashboard");
+    redirectToProductionApp();
   });
 
   signupForm.addEventListener("submit", async (e) => {
@@ -578,7 +600,7 @@ function setupAuthListeners() {
       return;
     }
     if (data.session) {
-      navigate("/dashboard");
+      redirectToProductionApp();
       return;
     }
     setMessage(
