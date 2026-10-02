@@ -8,7 +8,6 @@ const SUPABASE_ANON_KEY =
 
 const { createClient } = supabase;
 const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-const PRODUCTION_APP_URL = "https://jeehustlers.netlify.app";
 
 /* =========================================================================
    1. SMALL SHARED HELPERS
@@ -265,12 +264,6 @@ function navigate(pathWithQuery) {
   window.location.hash = pathWithQuery;
 }
 
-function redirectToProductionApp() {
-  if (window.location.origin !== PRODUCTION_APP_URL) {
-    window.location.replace(`${PRODUCTION_APP_URL}${window.location.pathname}`);
-  }
-}
-
 function qs(name) {
   return currentRoute.params.get(name);
 }
@@ -469,7 +462,7 @@ function setupAuthListeners() {
     const { error } = await sb.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo: `${PRODUCTION_APP_URL}${window.location.pathname}`,
+        redirectTo: `${window.location.origin}${window.location.pathname}`,
         queryParams: { prompt: "select_account" },
       },
     });
@@ -506,7 +499,7 @@ function setupAuthListeners() {
     const { error } = await sb.auth.linkIdentity({
       provider: "google",
       options: {
-        redirectTo: `${PRODUCTION_APP_URL}${window.location.pathname}`,
+        redirectTo: `${window.location.origin}${window.location.pathname}`,
         queryParams: { prompt: "select_account" },
       },
     });
@@ -572,7 +565,7 @@ function setupAuthListeners() {
     }
     btn.disabled = false;
     btn.textContent = "Log in";
-    redirectToProductionApp();
+    navigate("/dashboard");
   });
 
   signupForm.addEventListener("submit", async (e) => {
@@ -600,7 +593,7 @@ function setupAuthListeners() {
       return;
     }
     if (data.session) {
-      redirectToProductionApp();
+      navigate("/dashboard");
       return;
     }
     setMessage(
