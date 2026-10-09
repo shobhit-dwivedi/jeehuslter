@@ -998,14 +998,31 @@ function fetchTestsCatalog() {
 }
 
 function fetchPracticeCatalog() {
-  return sb.rpc("get_student_practice_catalog").then(({ data, error }) => ({
-    data: (data || []).map((entry) => ({
-      ...entry,
-      windowState: "ongoing",
-      practice_available: true,
-    })),
-    error,
-  }));
+  return sb.rpc("get_student_practice_catalog").then(async ({ data, error }) => {
+    if (!error) {
+      return {
+        data: (data || []).map((entry) => ({
+          ...entry,
+          windowState: "ongoing",
+          practice_available: true,
+        })),
+        error: null,
+      };
+    }
+    // Keep the catalog usable while an older Supabase project is waiting for
+    // the additive migration. The fallback retains the existing behavior;
+    // lifetime practice becomes available after the migration is applied.
+    if (!/get_student_practice_catalog|schema cache|does not exist/i.test(error.message || "")) {
+      return { data: [], error };
+    }
+    const fallback = await sb.rpc("get_student_test_catalog");
+    return {
+      data: (fallback.data || [])
+        .filter((entry) => entry.is_practice)
+        .map((entry) => ({ ...entry, windowState: "ongoing", practice_available: true })),
+      error: fallback.error || null,
+    };
+  });
 }
 
 async function loadCatalogMerged() {
