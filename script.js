@@ -997,10 +997,26 @@ function fetchTestsCatalog() {
   }));
 }
 
+function fetchPracticeCatalog() {
+  return sb.rpc("get_student_practice_catalog").then(({ data, error }) => ({
+    data: (data || []).map((entry) => ({
+      ...entry,
+      windowState: "ongoing",
+      practice_available: true,
+    })),
+    error,
+  }));
+}
+
 async function loadCatalogMerged() {
-  const [{ data: catalog, error: catErr }, { data: attempts, error: attErr }] =
+  const [
+    { data: catalog, error: catErr },
+    { data: practiceCatalog, error: practiceErr },
+    { data: attempts, error: attErr },
+  ] =
     await Promise.all([
       fetchTestsCatalog(),
+      fetchPracticeCatalog(),
       sb
         .from("test_attempts")
         .select(
@@ -1008,8 +1024,13 @@ async function loadCatalogMerged() {
         )
         .eq("user_id", myProfile.id),
     ]);
-  if (catErr || attErr) return { error: catErr || attErr };
-  const merged = mergeCatalogWithAttempts(catalog, attempts);
+  if (catErr || practiceErr || attErr) return { error: catErr || practiceErr || attErr };
+  const byTestId = new Map();
+  [...(catalog || []), ...(practiceCatalog || [])].forEach((entry) => {
+    const key = String(entry.id);
+    if (!byTestId.has(key) || entry.is_practice) byTestId.set(key, entry);
+  });
+  const merged = mergeCatalogWithAttempts([...byTestId.values()], attempts);
   testsCatalogCache = merged;
   return { merged, attempts: attempts || [] };
 }
@@ -1065,12 +1086,10 @@ function mergeCatalogWithAttempts(catalog, attempts) {
 function testCardCta(entry) {
   const a = entry.myAttempt;
   if (entry.is_practice) {
-    // The main (real) test card already offers "Reattempt" — this card is
-    // that re-attempt, so it only ever needs to view or resume itself.
     if (a && a.status !== "in_progress") {
       return `<a class="btn btn-sm btn-practice" href="#/result?attempt=${a.id}">View practice report</a>`;
     }
-    return `<a class="btn btn-sm btn-practice" href="#/exam?test=${encodeURIComponent(entry.id)}&practice=1">Resume practice</a>`;
+    return `<a class="btn btn-primary btn-sm btn-practice" href="#/exam?test=${encodeURIComponent(entry.id)}&practice=1">Start test</a>`;
   }
   if (a && a.status !== "in_progress") {
     return `<a class="btn btn-sm" href="#/result?attempt=${a.id}">View Report</a> <button type="button" class="btn btn-sm btn-print" data-print-attempt="${a.id}" title="Preview the question paper with answer key and download it as a PDF">📄 Get Questions PDF</button>`;
@@ -2207,8 +2226,8 @@ function renderPracticeButton(enabled) {
   btn.querySelector(".visibility-btn-icon").textContent = enabled ? "👁" : "🚫";
   btn.querySelector(".visibility-btn-label").textContent = enabled ? "Shown" : "Hidden";
   btn.title = enabled
-    ? "Click to hide this test from the practice list after it closes"
-    : "Click to let everyone practise this test after it closes";
+    ? "Click to hide this test from the lifetime practice library"
+    : "Click to publish this test in the lifetime practice library";
   if (hint)
     hint.textContent = enabled
       ? "Shown: once this test closes, every student can take it as a practice test — no rank or percentile. Click to hide it."
@@ -4240,20 +4259,10 @@ async function enterExamView() {
   // A practice re-attempt is personal revision: it isn't bound by the
   // test's publish/close window (the student already completed the real,
   // scheduled attempt to unlock it in the first place).
-  if (
-    !testMetaError &&
-    testMeta &&
-    testMeta.is_published &&
-    pendingIsPractice &&
-    (Date.now() < new Date(testMeta.available_until).getTime() ||
-      testMeta.practice_enabled === false)
-  ) {
-    const stillLive = Date.now() < new Date(testMeta.available_until).getTime();
+  if (!testMetaError && testMeta && pendingIsPractice && testMeta.practice_enabled === false) {
     showTerminal(
       "Practice isn't available",
-      stillLive
-        ? "Practice opens once the live test has closed."
-        : "Practice mode has been switched off for this test.",
+      "Practice mode has been switched off for this test.",
       "#/tests",
       "Back to Tests",
     );
