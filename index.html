@@ -24,36 +24,55 @@
      ===================================================================== -->
   <aside class="app-sidebar" id="appSidebar">
     <div>
-      <a href="#/dashboard" class="app-sidebar-logo">JEE <span>HUSTLERS</span></a>
+      <a href="#/dashboard" class="app-sidebar-logo" title="JEE Hustlers"><span class="logo-mark">JH</span><span class="logo-text">JEE <span>HUSTLERS</span></span></a>
       <nav class="app-sidebar-nav">
-        <a href="#/dashboard" class="app-nav-item" data-nav="dashboard"><span class="app-nav-icon">🏠</span> Home</a>
-        <a href="#/tests" class="app-nav-item" data-nav="tests"><span class="app-nav-icon">📝</span> Tests</a>
-        <a href="#/leaderboard" class="app-nav-item" data-nav="leaderboard"><span class="app-nav-icon">🏆</span> Leaderboard</a>
-        <a href="#/analytics" class="app-nav-item" data-nav="analytics"><span class="app-nav-icon">📊</span> Analytics</a>
-        <a href="#/profile" class="app-nav-item" data-nav="profile"><span class="app-nav-icon">👤</span> Profile</a>
-        <a href="#/admin-test" class="app-nav-item" data-nav="admin-test" id="appNavAdmin" style="display:none;"><span class="app-nav-icon">🛠️</span> Admin</a>
-        <a href="#/bulk-import" class="app-nav-item" data-nav="bulk-import" id="appNavBulkImport" style="display:none;"><span class="app-nav-icon">📥</span> Bulk import</a>
+        <a href="#/dashboard" class="app-nav-item" data-nav="dashboard" title="Home"><span class="app-nav-icon">🏠</span><span class="app-nav-label">Home</span></a>
+        <a href="#/tests" class="app-nav-item" data-nav="tests" title="Tests"><span class="app-nav-icon">📝</span><span class="app-nav-label">Tests</span></a>
+        <a href="#/practice" class="app-nav-item" data-nav="practice" title="Infinite practice"><span class="app-nav-icon">♾️</span><span class="app-nav-label">Practice</span></a>
+        <a href="#/leaderboard" class="app-nav-item" data-nav="leaderboard" title="Leaderboard"><span class="app-nav-icon">🏆</span><span class="app-nav-label">Leaderboard</span></a>
+        <a href="#/analytics" class="app-nav-item" data-nav="analytics" title="Analytics"><span class="app-nav-icon">📊</span><span class="app-nav-label">Analytics</span></a>
+        <a href="#/errors" class="app-nav-item" data-nav="errors" title="Error book"><span class="app-nav-icon">📖</span><span class="app-nav-label">Error book</span></a>
+        <a href="#/profile" class="app-nav-item" data-nav="profile" title="Profile"><span class="app-nav-icon">👤</span><span class="app-nav-label">Profile</span></a>
+        <a href="#/admin-test" class="app-nav-item" data-nav="admin-test" title="Admin" id="appNavAdmin" style="display:none;"><span class="app-nav-icon">🛠️</span><span class="app-nav-label">Admin</span></a>
+        <a href="#/bulk-import" class="app-nav-item" data-nav="bulk-import" title="Bulk import" id="appNavBulkImport" style="display:none;"><span class="app-nav-icon">📥</span><span class="app-nav-label">Bulk import</span></a>
       </nav>
-    </div>
-    <div class="app-sidebar-bottom">
-      <div class="app-sidebar-user">
-        <div class="app-sidebar-avatar" id="appSidebarAvatar">S</div>
-        <div class="app-sidebar-user-info">
-          <div class="app-sidebar-user-name" id="appSidebarUserName">…</div>
-          <div class="app-sidebar-user-role" id="appSidebarUserRole">Student</div>
-        </div>
-      </div>
-      <button type="button" class="btn btn-sm app-sidebar-logout js-logout">Log out</button>
     </div>
   </aside>
 
   <nav class="app-bottom-nav" id="appBottomNav">
     <a href="#/dashboard" class="app-bottom-item" data-nav="dashboard"><span class="app-bottom-icon">🏠</span><span>Home</span></a>
     <a href="#/tests" class="app-bottom-item" data-nav="tests"><span class="app-bottom-icon">📝</span><span>Tests</span></a>
+    <a href="#/practice" class="app-bottom-item" data-nav="practice"><span class="app-bottom-icon">♾️</span><span>Practice</span></a>
     <a href="#/leaderboard" class="app-bottom-item" data-nav="leaderboard"><span class="app-bottom-icon">🏆</span><span>Board</span></a>
     <a href="#/analytics" class="app-bottom-item" data-nav="analytics"><span class="app-bottom-icon">📊</span><span>Stats</span></a>
-    <a href="#/profile" class="app-bottom-item" data-nav="profile"><span class="app-bottom-icon">👤</span><span>Profile</span></a>
+    <a href="#/errors" class="app-bottom-item" data-nav="errors"><span class="app-bottom-icon">📖</span><span>Error book</span></a>
   </nav>
+
+
+  <header class="app-topbar" id="appTopbar">
+    <div class="topbar-left">
+      <button type="button" class="topbar-icon-btn topbar-collapse" id="sidebarToggle" aria-label="Collapse sidebar" aria-expanded="true" title="Collapse sidebar"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+      <a href="#/dashboard" class="topbar-brand">JEE <span>HUSTLERS</span></a>
+      <div class="topbar-title">
+        <span class="topbar-eyebrow" id="topbarEyebrow">Student</span>
+        <strong id="topbarTitle">Home</strong>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <button type="button" class="topbar-pill" id="notifPill" hidden><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg><span class="topbar-pill-label"></span></button>
+      <div class="topbar-user">
+        <button type="button" class="topbar-user-btn" id="topbarUserBtn" aria-haspopup="menu" aria-expanded="false">
+          <span class="topbar-avatar" id="topbarAvatar">S</span>
+          <span class="topbar-user-text"><b id="topbarUserName">…</b><small id="topbarUserRole">Student</small></span>
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
+        <div class="topbar-menu" id="topbarMenu" role="menu" hidden>
+          <a href="#/profile" role="menuitem">👤 My profile</a>
+          <button type="button" class="js-logout" role="menuitem">⎋ Log out</button>
+        </div>
+      </div>
+    </div>
+  </header>
 
   <!-- =====================================================================
      LANDING VIEW — public front page, shown to signed-out visitors
@@ -321,11 +340,10 @@
           <div class="dashboard-section-heading">
             <div>
               <span class="eyebrow-label">Exam workspace</span>
-              <h2>All tests</h2>
+              <h2>Live tests</h2>
             </div>
-            <a href="#/tests" class="btn btn-sm">Open full list</a>
+            <a href="#/tests" class="btn btn-sm">Past &amp; practice</a>
           </div>
-          <div id="homeTestsToolbar" class="tests-toolbar"></div>
           <div id="homeTestsGrid" class="tests-card-grid">
             <div class="empty-state">Loading…</div>
           </div>
@@ -337,6 +355,11 @@
             <span class="home-quick-icon">📝</span>
             <span>My Tests</span>
             <span class="home-quick-sub">View &amp; attempt</span>
+          </a>
+          <a href="#/practice" class="home-quick-card">
+            <span class="home-quick-icon">♾️</span>
+            <span>Infinite Practice</span>
+            <span class="home-quick-sub">PYQs, topics and revision</span>
           </a>
           <a href="#/leaderboard" class="home-quick-card">
             <span class="home-quick-icon">🏆</span>
@@ -363,12 +386,58 @@
           </div>
         </div>
 
-        <footer class="app-footer">
-          <p>For any query, support, or doubt, contact <a href="mailto:shobhitdwivedi.in@gmail.com">shobhitdwivedi.in@gmail.com</a></p>
-        </footer>
 
       </div>
     </div>
+  </section>
+
+  <section id="view-practice" class="view">
+    <div class="page-body"><div class="container practice-container">
+      <div class="section-title"><div><span class="eyebrow-label">Practice without limits</span><h1>Infinite Practice</h1><p class="text-muted">Choose a focused collection or keep building your preparation with manual tests published by the admin team.</p></div></div>
+      <div class="practice-collection-grid">
+        <a class="practice-collection-card" href="#/practice-library?category=all"><span>📚</span><strong>All practice tests</strong><small>Browse every available test</small></a>
+        <a class="practice-collection-card" href="#/practice-library?category=pyq"><span>🧾</span><strong>PYQ practice</strong><small>Previous-year and shift papers</small></a>
+        <a class="practice-collection-card" href="#/practice-library?category=topic"><span>🎯</span><strong>Topic practice</strong><small>Build accuracy one topic at a time</small></a>
+        <a class="practice-collection-card" href="#/practice-library?category=full"><span>🚀</span><strong>Full syllabus</strong><small>Mixed revision under time pressure</small></a>
+        <a class="practice-collection-card" href="#/practice-library?category=custom"><span>🛠️</span><strong>Custom test</strong><small>Request a test that is not listed</small></a>
+      </div>
+      <section class="card"><div class="section-title"><div><h2>Available practice</h2><span class="text-muted">Practice attempts do not affect official rank.</span></div></div><div id="practiceCatalog"><div class="empty-state">Loading practice tests…</div></div></section>
+    </div></div>
+  </section>
+
+  <section id="view-practice-library" class="view">
+    <div class="page-body"><div class="container practice-container">
+      <a class="practice-back-link" href="#/practice">← Back to Infinite Practice</a>
+      <div class="section-title"><div><span class="eyebrow-label">Practice library</span><h1 id="practiceLibraryTitle">Practice tests</h1><p id="practiceLibraryDescription" class="text-muted">Choose a test to begin practice.</p></div></div>
+      <section class="card"><div class="section-title"><div><h2 id="practiceLibraryHeading">Available tests</h2><span class="text-muted">Practice attempts do not affect official rank.</span></div></div><div id="practiceLibraryCatalog"><div class="empty-state">Loading tests…</div></div></section>
+    </div></div>
+  </section>
+
+
+  <section id="view-errors" class="view">
+    <div class="page-body"><div class="container practice-container">
+      <div class="section-title"><div><span class="eyebrow-label">Private revision log</span><h1>Error Book</h1><p class="text-muted">Record what went wrong so your next revision is intentional.</p></div></div>
+      <form id="errorBookForm" class="card request-form" style="margin-bottom:16px">
+        <div class="section-title"><div><h2>Add a mistake</h2><span class="text-muted">Only you can view these notes and attachments.</span></div></div>
+        <div class="form-grid form-grid-2">
+          <label>Question or reminder<textarea id="errorQuestionText" rows="3" required placeholder="Paste the question or describe the mistake"></textarea></label>
+          <label>Why did this happen?<select id="errorCategory"><option>Silly mistake</option><option>Concept gap</option><option>Formula forgotten</option><option>Calculation mistake</option><option>Misread question</option><option>Time pressure</option><option>Wrong approach</option><option>Guessing</option><option>Did not know the concept</option><option>Other</option></select></label>
+          <label>Your note<textarea id="errorComment" rows="3" placeholder="What will you do differently next time?"></textarea></label>
+          <div class="form-field-stack">
+            <label>Image (gallery, camera, or file)<input id="errorImage" type="file" accept="image/*" capture="environment"></label>
+            <div class="voice-recorder" aria-labelledby="errorVoiceLabel">
+              <span id="errorVoiceLabel" class="field-label">Voice note</span>
+              <div class="voice-recorder-controls"><button id="errorVoiceRecord" class="btn btn-sm" type="button">🎙️ Record voice note</button><button id="errorVoiceStop" class="btn btn-sm" type="button" disabled>Stop</button><button id="errorVoiceDelete" class="btn btn-sm" type="button" disabled>Delete recording</button></div>
+              <span id="errorVoiceStatus" class="form-hint">Your browser will ask for microphone access when you start recording.</span>
+              <audio id="errorVoicePreview" controls hidden></audio>
+            </div>
+          </div>
+        </div>
+        <div class="form-actions"><button class="btn btn-primary" type="submit">Save to Error Book</button><span id="errorBookFormMessage" class="form-message"></span></div>
+      </form>
+      <div id="errorBookSummary" class="home-stats"></div>
+      <div id="errorBookList" class="error-book-list"><div class="empty-state">Loading error book…</div></div>
+    </div></div>
   </section>
 
   <!-- =====================================================================
@@ -376,16 +445,6 @@
      Upcoming/Past), and (for admins) the existing admin test list.
      ===================================================================== -->
   <section id="view-tests" class="view">
-    <header class="appbar">
-      <div class="container">
-        <a href="#/dashboard" class="appbar-brand"><span class="dot"></span> Test Series</a>
-        <div class="appbar-user">
-          <span id="userName">…</span>
-          <span class="role-chip" id="roleChip"></span>
-          <button class="btn btn-sm js-logout">Log out</button>
-        </div>
-      </div>
-    </header>
 
     <div class="page-body">
       <div class="container">
@@ -398,22 +457,35 @@
         </div>
 
         <section id="studentSection" class="mt-16">
-          <div class="section-title">
-            <h2>My Tests</h2>
+          <div class="section-title tests-page-head">
+            <div>
+              <h2>Past &amp; practice tests</h2>
+              <p class="text-muted tests-page-sub">Every test you've attempted, in order — plus closed tests you can practise. Practice never has a rank or percentile.</p>
+            </div>
           </div>
-          <div class="tests-toolbar">
+          <div class="tests-toolbar past-toolbar">
             <div class="tests-search">
               <span class="tests-search-icon">🔍</span>
-              <input type="search" id="testsSearchInput" placeholder="Search tests…">
+              <input type="search" id="testsSearchInput" placeholder="Search tests…" autocomplete="off">
             </div>
             <div class="segmented tests-status-tabs" id="testsStatusTabs">
               <button type="button" class="active" data-filter="all">All</button>
-              <button type="button" data-filter="ongoing">Ongoing</button>
-              <button type="button" data-filter="upcoming">Upcoming</button>
-              <button type="button" data-filter="past">Past</button>
+              <button type="button" data-filter="main">Main test</button>
+              <button type="button" data-filter="practice">Practice</button>
+              <button type="button" data-filter="new">Not attempted</button>
             </div>
+            <label class="past-sort">
+              <span>Sort</span>
+              <select id="testsSortSelect" aria-label="Sort tests">
+                <option value="newest">Newest first</option>
+                <option value="oldest">Oldest first</option>
+                <option value="score_desc">Score: high to low</option>
+                <option value="score_asc">Score: low to high</option>
+                <option value="name">Test name (A–Z)</option>
+              </select>
+            </label>
           </div>
-          <div id="testsCardGrid" class="tests-card-grid">
+          <div id="testsCardGrid" class="past-list">
             <div class="empty-state">Loading…</div>
           </div>
         </section>
@@ -446,24 +518,12 @@
           </div>
         </section>
 
-        <footer class="app-footer">
-          <p>For any query, support, or doubt, contact <a href="mailto:shobhitdwivedi.in@gmail.com">shobhitdwivedi.in@gmail.com</a></p>
-        </footer>
 
       </div>
     </div>
   </section>
 
   <section id="view-test-details" class="view">
-    <header class="appbar">
-      <div class="container">
-        <a href="#/dashboard" class="appbar-brand"><span class="dot"></span> Test Series</a>
-        <div class="appbar-user">
-          <a href="#/dashboard" class="btn btn-sm">← Dashboard</a>
-          <button class="btn btn-sm js-logout">Log out</button>
-        </div>
-      </div>
-    </header>
     <div class="page-body">
       <div class="container test-details-container">
         <div id="testDetailsContent">
@@ -477,15 +537,6 @@
      ADMIN TEST MANAGER VIEW
      ===================================================================== -->
   <section id="view-admin-test" class="view">
-    <header class="appbar">
-      <div class="container">
-        <a href="#/dashboard" class="appbar-brand"><span class="dot"></span> Test Series</a>
-        <div class="appbar-user">
-          <a href="#/tests" class="btn btn-sm">← Tests</a>
-          <button class="btn btn-sm js-logout">Log out</button>
-        </div>
-      </div>
-    </header>
 
     <div class="page-body">
       <div class="container admin-page-container">
@@ -497,6 +548,10 @@
         <div id="adminMainContent" style="display:none;">
 
           <div id="adminSummary" class="admin-summary" style="display:none;"></div>
+          <section class="card" id="studentRequestsAdminCard">
+            <div class="section-title"><div><h2 style="font-size:16px;">Student Test Requests</h2><span class="text-muted">Review requests before manually creating a test.</span></div></div>
+            <div id="studentRequestsAdminList"><div class="empty-state">Loading requests…</div></div>
+          </section>
           <nav id="adminJump" class="admin-jump" aria-label="Jump to section" style="display:none;">
             <button type="button" data-jump="detailsCard">Details</button>
             <button type="button" data-jump="shareCard">Schedule</button>
@@ -535,6 +590,17 @@
                   </select>
                 </div>
                 <div class="field">
+                  <label for="practiceCategoryInput">Practice category</label>
+                  <select id="practiceCategoryInput">
+                    <option value="all">All practice tests</option>
+                    <option value="pyq">PYQ practice</option>
+                    <option value="topic">Topic practice</option>
+                    <option value="full">Full syllabus</option>
+                    <option value="custom">Custom/requested test</option>
+                  </select>
+                  <label class="check-label"><input type="checkbox" id="practiceOnlyInput"> Infinite Practice only</label>
+                </div>
+                <div class="field">
                   <label for="durationInput">Exam duration (minutes)</label>
                   <input type="number" id="durationInput" min="5" value="180" required>
                 </div>
@@ -567,6 +633,15 @@
                 <small id="visibilityHint"></small>
               </span>
               <button type="button" class="visibility-btn is-shown" id="visibilityToggleBtn" aria-pressed="true">
+                <span class="visibility-btn-icon">👁</span><span class="visibility-btn-label">Shown</span>
+              </button>
+            </div>
+            <div class="visibility-toggle">
+              <span class="visibility-toggle-text">
+                <strong>Practice test after it closes</strong>
+                <small id="practiceHint"></small>
+              </span>
+              <button type="button" class="visibility-btn is-shown" id="practiceToggleBtn" aria-pressed="true">
                 <span class="visibility-btn-icon">👁</span><span class="visibility-btn-label">Shown</span>
               </button>
             </div>
@@ -739,16 +814,6 @@
      BULK QUESTION IMPORT VIEW — admin-only, parse/validate before insert
      ===================================================================== -->
   <section id="view-bulk-import" class="view">
-    <header class="appbar">
-      <div class="container">
-        <a href="#/dashboard" class="appbar-brand"><span class="dot"></span> Test Series</a>
-        <div class="appbar-user">
-          <a href="#/tests" class="btn btn-sm">← Tests</a>
-          <a href="#/admin-test" class="btn btn-sm">Admin</a>
-          <button class="btn btn-sm js-logout">Log out</button>
-        </div>
-      </div>
-    </header>
 
     <div class="page-body">
       <div class="container admin-page-container">
@@ -880,6 +945,11 @@
     <div id="beginInstructions" class="begin-instructions">
       Loading instructions... 
     </div>
+    <div id="beginNotificationGate" class="notification-gate" hidden>
+      <p>Browser notifications must be enabled before a test can start.</p>
+      <button type="button" class="btn" id="beginEnableNotificationsBtn">Enable Notifications</button>
+      <small id="beginNotificationStatus"></small>
+    </div>
  
     <div class="begin-test-footer">
       <button class="btn btn-primary btn-block" id="beginBtn">
@@ -963,15 +1033,6 @@
      RESULT VIEW
      ===================================================================== -->
   <section id="view-result" class="view">
-    <header class="appbar">
-      <div class="container">
-        <a href="#/dashboard" class="appbar-brand"><span class="dot"></span> Test Series</a>
-        <div class="appbar-user">
-          <a href="#/tests" class="btn btn-sm">← Tests</a>
-          <button class="btn btn-sm js-logout">Log out</button>
-        </div>
-      </div>
-    </header>
 
     <div class="page-body">
       <div class="container result-container">
@@ -983,38 +1044,26 @@
   </section>
 
   <section id="view-leaderboard" class="view">
-    <header class="appbar">
-      <div class="container">
-        <a href="#/dashboard" class="appbar-brand"><span class="dot"></span> Test Series</a>
-        <div class="appbar-user">
-          <a href="#/dashboard" class="btn btn-sm">← Dashboard</a>
-          <button class="btn btn-sm js-logout">Log out</button>
-        </div>
-      </div>
-    </header>
     <div class="page-body">
       <div class="container leaderboard-container">
-        <div class="section-title analytics-heading">
-          <div><h1>Top 10</h1><p class="text-muted">Ranked by average score across completed tests.</p></div>
+        <div class="lb-head">
+          <div>
+            <h1>Top 10</h1>
+            <p class="text-muted" id="lbSubtitle">Ranked by average score across released tests.</p>
+          </div>
+          <div class="segmented lb-period" id="lbPeriod">
+            <button type="button" class="active" data-period="current">This month</button>
+            <button type="button" data-period="previous">Last month</button>
+          </div>
         </div>
+        <div class="lb-reset" id="lbReset"></div>
+        <div class="lb-cats" id="lbCats" role="group" aria-label="Leaderboard category"></div>
         <div id="leaderboardContent"><div class="empty-state">Loading leaderboard…</div></div>
-        <footer class="app-footer">
-          <p>For any query, support, or doubt, contact <a href="mailto:shobhitdwivedi.in@gmail.com">shobhitdwivedi.in@gmail.com</a></p>
-        </footer>
       </div>
     </div>
   </section>
 
   <section id="view-analytics" class="view">
-    <header class="appbar">
-      <div class="container">
-        <a href="#/dashboard" class="appbar-brand"><span class="dot"></span> Test Series</a>
-        <div class="appbar-user">
-          <a href="#/dashboard" class="btn btn-sm">← Dashboard</a>
-          <button class="btn btn-sm js-logout">Log out</button>
-        </div>
-      </div>
-    </header>
     <div class="page-body">
       <div class="container">
         <div class="section-title analytics-heading">
@@ -1022,32 +1071,23 @@
         </div>
         <div id="analyticsContent"><div class="empty-state">Loading analytics…</div></div>
         <div id="analysisHistory" class="analysis-history"></div>
-        <footer class="app-footer">
-          <p>For any query, support, or doubt, contact <a href="mailto:shobhitdwivedi.in@gmail.com">shobhitdwivedi.in@gmail.com</a></p>
-        </footer>
       </div>
     </div>
   </section>
 
   <section id="view-profile" class="view">
-    <header class="appbar">
-      <div class="container">
-        <a href="#/dashboard" class="appbar-brand"><span class="dot"></span> Test Series</a>
-        <div class="appbar-user">
-          <a href="#/dashboard" class="btn btn-sm">← Dashboard</a>
-          <button class="btn btn-sm js-logout">Log out</button>
-        </div>
-      </div>
-    </header>
     <div class="page-body">
       <div class="container profile-container">
         <div id="profileContent"><div class="empty-state">Loading profile…</div></div>
-        <footer class="app-footer">
-          <p>For any query, support, or doubt, contact <a href="mailto:shobhitdwivedi.in@gmail.com">shobhitdwivedi.in@gmail.com</a></p>
-        </footer>
       </div>
     </div>
   </section>
+
+  <footer class="app-footer app-footer-shared">
+    <div class="container">
+      <p>For any query, support, or doubt, contact <a href="mailto:shobhitdwivedi.in@gmail.com">shobhitdwivedi.in@gmail.com</a></p>
+    </div>
+  </footer>
 
   <div class="modal-backdrop" id="feedbackModal">
     <div class="modal">
@@ -1092,11 +1132,13 @@
   <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
   <script>
     window.OneSignalDeferred = window.OneSignalDeferred || [];
-    OneSignalDeferred.push(async function (OneSignal) {
-      await OneSignal.init({
-        appId: "d10d5489-441b-47ea-8f90-0bff543e0773",
+    if (location.protocol === "https:" && location.hostname === "jeehustlers.netlify.app") {
+      OneSignalDeferred.push(async function (OneSignal) {
+        await OneSignal.init({
+          appId: "d10d5489-441b-47ea-8f90-0bff543e0773",
+        });
       });
-    });
+    }
   </script>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
@@ -1113,8 +1155,8 @@
   </div>
 </div>
 
-<script defer src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="script.js"></script>
 </body> 
 
-</html>
+</html> 

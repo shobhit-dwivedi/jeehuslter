@@ -216,6 +216,8 @@ const VIEWS = [
   "auth",
   "dashboard",
   "tests",
+  "practice",
+  "practice-library",
   "test-details",
   "admin-test",
   "bulk-import",
@@ -224,6 +226,7 @@ const VIEWS = [
   "result",
   "leaderboard",
   "analytics",
+  "errors",
   "profile",
 ];
 
@@ -233,12 +236,15 @@ const VIEWS = [
 const APP_SHELL_VIEWS = new Set([
   "dashboard",
   "tests",
+  "practice",
+  "practice-library",
   "test-details",
   "admin-test",
   "bulk-import",
   "result",
   "leaderboard",
   "analytics",
+  "errors",
   "profile",
 ]);
 let currentRoute = { path: "/login", params: new URLSearchParams() };
@@ -331,6 +337,14 @@ async function router() {
       showView("tests");
       await enterTestsView();
       break;
+    case "/practice":
+      showView("practice");
+      await enterPracticeView();
+      break;
+    case "/practice-library":
+      showView("practice-library");
+      await enterPracticeLibraryView();
+      break;
     case "/test-details":
       showView("test-details");
       await enterTestDetailsView();
@@ -366,9 +380,13 @@ async function router() {
       showView("analytics");
       await enterAnalyticsView();
       break;
+    case "/errors":
+      showView("errors");
+      await enterErrorBookView();
+      break;
     case "/profile":
       showView("profile");
-      await enterProfilePlaceholder();
+      await enterProfileView();
       break;
     default:
       navigate("/dashboard");
@@ -381,25 +399,212 @@ async function router() {
   );
 }
 
+/* =========================================================================
+   PUSH NOTIFICATIONS (OneSignal) — students are required to allow them.
+   Fails open: if OneSignal cannot load (ad-blocker, offline) the state is
+   "unknown" and nothing is blocked.
+   ========================================================================= */
+const pushNotifications = (() => {
+  const listeners = new Set();
+  let sdkPromise = null;
+
+  const notify = async () => {
+    const current = await state();
+    listeners.forEach((callback) => callback(current));
+  };
+
+  function sdk() {
+    if (!sdkPromise) {
+      sdkPromise = new Promise((resolve) => {
+        const timer = setTimeout(() => resolve(null), 6000);
+        window.OneSignalDeferred = window.OneSignalDeferred || [];
+        window.OneSignalDeferred.push((OneSignal) => {
+          clearTimeout(timer);
+          try {
+            OneSignal.Notifications.addEventListener("permissionChange", notify);
+            OneSignal.User.PushSubscription.addEventListener("change", notify);
+          } catch (err) {
+            console.warn("OneSignal listeners unavailable:", err);
+          }
+          resolve(OneSignal);
+        });
+      });
+    }
+    return sdkPromise;
+  }
+
+  // "granted" | "default" | "denied" | "unsupported" | "unknown"
+  async function state() {
+    const os = await sdk();
+    if (!os) return "unknown";
+    for (let attempt = 0; attempt < 6; attempt++) {
+      try {
+        if (!os.Notifications.isPushSupported()) return "unsupported";
+        if (os.Notifications.permission !== true)
+          return (os.Notifications.permissionNative ?? (typeof Notification !== "undefined" ? Notification.permission : "default")) === "denied"
+            ? "denied"
+            : "default";
+        return os.User.PushSubscription.optedIn === false ? "default" : "granted";
+      } catch (err) {
+        await new Promise((resolve) => setTimeout(resolve, 500)); // still initialising
+      }
+    }
+    return "unknown";
+  }
+
+  // true = allowed, false = not allowed yet, null = cannot tell (never block)
+  async function isEnabled() {
+    const current = await state();
+    if (current === "granted") return true;
+    return current === "default" || current === "denied" ? false : null;
+  }
+
+  // Shows OneSignal's own pop-up. A browser that has blocked notifications
+  // cannot be asked again, so that case is reported back instead.
+  async function request() {
+    const os = await sdk();
+    const current = await state();
+    if (!os || current !== "default") return current;
+    try {
+      await os.Slidedown.promptPush({ force: true });
+    } catch (err) {
+      console.warn("OneSignal slidedown failed, using the browser prompt:", err);
+      try {
+        await os.Notifications.requestPermission();
+      } catch (_) {
+        /* the user can retry from the bell in the top bar */
+      }
+    }
+    return state();
+  }
+
+  function subscribe(callback) {
+    listeners.add(callback);
+    return () => listeners.delete(callback);
+  }
+
+  return { state, isEnabled, request, subscribe };
+})();
+
+const NOTIFICATION_BLOCKED_HELP =
+  "Notifications are blocked in this browser. Click the lock icon next to the address bar, allow notifications, then refresh the page.";
+
+/* =========================================================================
+   APP SHELL — top bar, collapsible sidebar, user menu
+   ========================================================================= */
+const PAGE_TITLES = {
+  dashboard: "Home",
+  tests: "Past & practice tests",
+  practice: "Infinite Practice",
+  "practice-library": "Practice library",
+  "test-details": "Test details",
+  "admin-test": "Manage test",
+  "bulk-import": "Bulk import",
+  result: "Report",
+  leaderboard: "Leaderboard",
+  analytics: "Analytics",
+  errors: "Error Book",
+  profile: "Profile",
+};
+const SIDEBAR_KEY = "jh_sidebar";
+
+function setSidebarCollapsed(collapsed, remember = true) {
+  document.body.classList.toggle("sidebar-collapsed", collapsed);
+  const button = document.getElementById("sidebarToggle");
+  if (button) {
+    const label = collapsed ? "Expand sidebar" : "Collapse sidebar";
+    button.setAttribute("aria-expanded", String(!collapsed));
+    button.setAttribute("aria-label", label);
+    button.title = label;
+  }
+  if (remember) localStorage.setItem(SIDEBAR_KEY, collapsed ? "collapsed" : "open");
+}
+
+function closeUserMenu() {
+  document.getElementById("topbarMenu")?.setAttribute("hidden", "");
+  document.getElementById("topbarUserBtn")?.setAttribute("aria-expanded", "false");
+}
+
+const NOTIFICATION_PILL = {
+  granted: { cls: "is-on", text: "Notifications on" },
+  default: { cls: "is-off", text: "Enable notifications" },
+  denied: { cls: "is-blocked", text: "Notifications blocked" },
+};
+
+async function refreshNotificationPill(current) {
+  const pill = document.getElementById("notifPill");
+  if (!pill) return;
+  const view = NOTIFICATION_PILL[current ?? (await pushNotifications.state())];
+  pill.hidden = !view;
+  if (!view) return;
+  pill.className = `topbar-pill ${view.cls}`;
+  pill.querySelector(".topbar-pill-label").textContent = view.text;
+  pill.title = view.text;
+}
+
+function setupShell() {
+  // Open by default; the choice is remembered.
+  setSidebarCollapsed(localStorage.getItem(SIDEBAR_KEY) === "collapsed", false);
+  document.getElementById("sidebarToggle").addEventListener("click", () =>
+    setSidebarCollapsed(!document.body.classList.contains("sidebar-collapsed")),
+  );
+
+  const menuButton = document.getElementById("topbarUserBtn");
+  const menu = document.getElementById("topbarMenu");
+  menuButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const open = menu.hasAttribute("hidden");
+    menu.toggleAttribute("hidden", !open);
+    menuButton.setAttribute("aria-expanded", String(open));
+  });
+  document.addEventListener("click", (event) => {
+    if (!event.target.closest(".topbar-user")) closeUserMenu();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeUserMenu();
+  });
+  menu.addEventListener("click", closeUserMenu);
+
+  document.getElementById("notifPill").addEventListener("click", async () => {
+    const current = await pushNotifications.state();
+    if (current === "denied") toast(NOTIFICATION_BLOCKED_HELP, "error");
+    else if (current === "default") await pushNotifications.request();
+  });
+  pushNotifications.subscribe(refreshNotificationPill);
+  refreshNotificationPill();
+}
+
+// Shows/hides the signed-in app shell and keeps it in sync with the active
+// view and the signed-in user. viewName is one of VIEWS, or null when signed out.
+async function syncAppShell(viewName, signedIn) {
+  const show = signedIn && APP_SHELL_VIEWS.has(viewName);
+  document.body.classList.toggle("app-shell-on", show);
+  if (!show) return;
+
+  document.querySelectorAll(".app-nav-item, .app-bottom-item").forEach((el) => {
+    el.classList.toggle("active", el.dataset.nav === viewName);
+  });
+  document.getElementById("topbarTitle").textContent =
+    PAGE_TITLES[viewName] || "JEE Hustlers";
+  closeUserMenu();
+
+  myProfile = myProfile || (await getMyProfile());
+  const name = myProfile?.full_name || "Student";
+  const isAdmin = myProfile?.role === "admin";
+  const role = isAdmin ? "Admin" : "Student";
+  document.getElementById("topbarAvatar").textContent =
+    name.trim().charAt(0).toUpperCase() || "S";
+  document.getElementById("topbarUserName").textContent = name;
+  document.getElementById("topbarUserRole").textContent = role;
+  document.getElementById("topbarEyebrow").textContent = role;
+  document.getElementById("appNavAdmin").style.display = isAdmin ? "" : "none";
+  document.getElementById("appNavBulkImport").style.display = isAdmin ? "" : "none";
+}
+
 window.addEventListener("hashchange", router);
 sb.auth.onAuthStateChange(async (event, session) => {
   router();
 
-  if (
-    session?.user &&
-    (event === "SIGNED_IN" || event === "INITIAL_SESSION")
-  ) {
-    try {
-      if (
-        typeof OneSignal !== "undefined" &&
-        Notification.permission === "default"
-      ) {
-        await OneSignal.Slidedown.promptPush();
-      }
-    } catch (error) {
-      console.warn("OneSignal login prompt failed:", error);
-    }
-  }
 });
 /* =========================================================================
    3. AUTH VIEW
@@ -629,11 +834,6 @@ function setupDashboardListeners() {
 // existing join/admin logic below work completely unchanged.
 async function enterTestsView() {
   myProfile = await getMyProfile();
-  const {
-    data: { session },
-  } = await sb.auth.getSession();
-  document.getElementById("userName").textContent =
-    myProfile?.full_name || session.user.email;
 
   // reset segmented state to a known default each time we arrive here
   document.getElementById("segStudent").classList.add("active");
@@ -641,21 +841,15 @@ async function enterTestsView() {
   document.getElementById("studentSection").style.display = "block";
   document.getElementById("adminSection").style.display = "none";
 
-  const roleChip = document.getElementById("roleChip");
-  roleChip.className = "role-chip";
-  if (myProfile?.role === "admin") {
-    roleChip.textContent = "Admin";
-    roleChip.classList.add("admin");
-    document.getElementById("adminSegmentWrap").style.display = "block";
-  } else {
-    roleChip.textContent = "Student";
-    document.getElementById("adminSegmentWrap").style.display = "none";
-  }
+  document.getElementById("adminSegmentWrap").style.display =
+    myProfile?.role === "admin" ? "block" : "none";
 
-  // reset the tests catalog's search/filter UI to a known default each time
-  testsFilterState = { status: "all", query: "" };
+  // reset the tests list's search / filter / sort UI to a known default each time
+  Object.assign(testsView, { q: "", kind: "all", sort: "newest" });
   const searchInput = document.getElementById("testsSearchInput");
   if (searchInput) searchInput.value = "";
+  const sortSelect = document.getElementById("testsSortSelect");
+  if (sortSelect) sortSelect.value = "newest";
   document
     .querySelectorAll("#testsStatusTabs button")
     .forEach((b) => b.classList.toggle("active", b.dataset.filter === "all"));
@@ -664,11 +858,120 @@ async function enterTestsView() {
   if (myProfile?.role === "admin") await loadAdminTests();
 }
 
+async function enterPracticeView() {
+  const target = document.getElementById("practiceCatalog");
+  if (!target) return;
+  await renderPracticeCategory(target, qs("category") || "all");
+}
+
+async function enterPracticeLibraryView() {
+  const target = document.getElementById("practiceLibraryCatalog");
+  if (!target) return;
+  const category = qs("category") || "all";
+  const labels = {
+    all: ["All practice tests", "Browse every available practice test."],
+    pyq: ["PYQ practice", "Previous-year and shift papers."],
+    topic: ["Topic practice", "Build accuracy one topic at a time."],
+    full: ["Full syllabus", "Mixed revision under time pressure."],
+    custom: ["Custom test", "Request a practice test that is not listed."],
+  };
+  const [title, description] = labels[category] || labels.all;
+  document.getElementById("practiceLibraryTitle").textContent = title;
+  document.getElementById("practiceLibraryDescription").textContent = description;
+  document.getElementById("practiceLibraryHeading").textContent = category === "custom" ? "Request a custom test" : title;
+  await renderPracticeCategory(target, category);
+}
+
+async function renderPracticeCategory(target, category) {
+  target.innerHTML = `<div class="empty-state">Loading practice tests…</div>`;
+  const { merged, error } = await loadCatalogMerged();
+  if (error) {
+    target.innerHTML = `<div class="error-box">${escapeHtml(friendlyError(error))}</div>`;
+    return;
+  }
+  if (category === "custom") {
+    target.innerHTML = renderCustomRequestForm();
+    bindCustomRequestForm();
+    await loadTestRequests();
+    return;
+  }
+  const allEntries = merged || [];
+  const { data: practiceMeta } = await sb.from("tests").select("id, practice_category, practice_only").in("id", allEntries.map((entry) => entry.id));
+  const metaById = new Map((practiceMeta || []).map((item) => [String(item.id), item]));
+  allEntries.forEach((entry) => Object.assign(entry, metaById.get(String(entry.id)) || {}));
+  const practice = allEntries.filter((entry) => entry.is_practice || entry.practice_only);
+  if (!practice.length) {
+    target.innerHTML = `<div class="empty-state">No practice collections are published yet. Check back after the admin publishes one.</div>`;
+    return;
+  }
+  const filtered = category === "all" ? practice : practice.filter((entry) =>
+    entry.practice_category === category ||
+    (category === "pyq" && /pyq|shift|previous year/i.test(entry.title || "")) ||
+    (category === "topic" && /topic|chapter|subject/i.test(entry.title || "")) ||
+    (category === "full" && !/pyq|shift|previous year|topic|chapter|subject/i.test(entry.title || "")),
+  );
+  target.innerHTML = filtered.length
+    ? `<section class="practice-group"><div class="practice-group-heading"><h3>${escapeHtml(category === "all" ? "All available tests" : `${category[0].toUpperCase()}${category.slice(1)} tests`)}</h3><span>${filtered.length} available</span></div><div class="tests-card-grid">${filtered.map((entry) => testCardHtml({ ...entry, is_practice: true, practice_available: true })).join("")}</div></section>`
+    : `<div class="empty-state">No tests right now.</div>`;
+}
+
+function renderCustomRequestForm() {
+  return `<div class="practice-request-layout"><div><span class="eyebrow-label">Not listed?</span><h2>Request a custom practice test</h2><p class="text-muted">An admin will manually review your preferences and create the test. Nothing is generated automatically.</p></div>
+    <form id="testRequestForm" class="card request-form">
+      <div class="form-row"><div class="field"><label for="requestExam">Exam</label><select id="requestExam" required><option>JEE Main</option><option>JEE Advanced</option><option>Other</option></select></div><div class="field"><label for="requestDifficulty">Difficulty</label><select id="requestDifficulty"><option>Mixed</option><option>Easy</option><option>Medium</option><option>Hard</option></select></div></div>
+      <fieldset class="field"><legend>Subjects</legend><div class="choice-grid"><label><input type="checkbox" name="requestSubject" value="Physics"> Physics</label><label><input type="checkbox" name="requestSubject" value="Chemistry"> Chemistry</label><label><input type="checkbox" name="requestSubject" value="Mathematics"> Mathematics</label></div></fieldset>
+      <div class="form-row"><div class="field"><label for="requestChapters">Chapters</label><textarea id="requestChapters" placeholder="One per line or Whole syllabus"></textarea></div><div class="field"><label for="requestTopics">Topics</label><textarea id="requestTopics" placeholder="Optional topics/subtopics"></textarea></div></div>
+      <div class="form-row"><div class="field"><label for="requestSource">Source</label><select id="requestSource"><option>Mixed</option><option value="PYQ">PYQ</option><option>Original</option></select></div><div class="field"><label for="requestCount">Questions</label><input id="requestCount" type="number" min="1" max="300" value="30" required></div><div class="field"><label for="requestDuration">Minutes</label><input id="requestDuration" type="number" min="5" max="600" value="60" required></div></div>
+      <div class="field"><label for="requestDate">Preferred date/time</label><input id="requestDate" type="datetime-local" required><div class="hint" id="requestDateHint"></div></div>
+      <div class="field"><label for="requestNote">Note</label><textarea id="requestNote" maxlength="1000"></textarea></div>
+      <button class="btn btn-primary" type="submit">SUBMIT CUSTOM REQUEST</button><div id="requestMessage" class="form-message" role="status"></div>
+    </form><section class="card"><div class="section-title"><h2>Your requests</h2></div><div id="testRequestsList"></div></section></div>`;
+}
+
+function bindCustomRequestForm() {
+  const form = document.getElementById("testRequestForm");
+  if (!form || form.dataset.bound) return;
+  form.dataset.bound = "1";
+  const date = document.getElementById("requestDate");
+  const minimum = requestMinimumDate();
+  date.min = localDateTimeValue(minimum);
+  document.getElementById("requestDateHint").textContent = `Earliest date: ${minimum.toLocaleDateString(undefined, { dateStyle: "medium" })}.`;
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const selectedDate = new Date(date.value);
+    const subjects = [...document.querySelectorAll('input[name="requestSubject"]:checked')].map((input) => input.value);
+    if (!subjects.length || !date.value || selectedDate < minimum) {
+      toast("Select at least one subject and a date at least 5 days from today.", "error");
+      return;
+    }
+    const button = form.querySelector("button[type=submit]");
+    button.disabled = true;
+    const { error } = await sb.rpc("submit_test_request", {
+      p_exam: document.getElementById("requestExam").value,
+      p_subjects: subjects,
+      p_chapters: splitRequestLines(document.getElementById("requestChapters").value),
+      p_topics: splitRequestLines(document.getElementById("requestTopics").value),
+      p_difficulty: document.getElementById("requestDifficulty").value,
+      p_question_source: document.getElementById("requestSource").value,
+      p_question_count: Number(document.getElementById("requestCount").value),
+      p_duration_minutes: Number(document.getElementById("requestDuration").value),
+      p_preferred_at: selectedDate.toISOString(),
+      p_student_note: document.getElementById("requestNote").value.trim() || null,
+    });
+    button.disabled = false;
+    if (error) toast(friendlyError(error), "error");
+    else {
+      document.getElementById("requestMessage").textContent = "Your custom request has been submitted for manual review.";
+      await loadTestRequests();
+    }
+  });
+}
+
 /* ---- Tests catalog: every published test the student can see, merged
    with their own attempt (if any), filterable by search + Ongoing/
    Upcoming/Past. Replaces the old plain "my attempts" list. ---- */
 let testsCatalogCache = [];
-let testsFilterState = { status: "all", query: "" };
+const testsView = { q: "", kind: "all", sort: "newest" };
 function fetchTestsCatalog() {
   return sb.rpc("get_student_dashboard_tests").then(({ data, error }) => ({
     data: (data || []).map((entry) => ({
@@ -680,6 +983,7 @@ function fetchTestsCatalog() {
             ? "upcoming"
             : "past",
 
+      practice_available: !!entry.practice_available,
       myAttempt: entry.attempt_id
         ? {
             id: entry.attempt_id,
@@ -691,6 +995,23 @@ function fetchTestsCatalog() {
     })),
     error,
   }));
+}
+
+async function loadCatalogMerged() {
+  const [{ data: catalog, error: catErr }, { data: attempts, error: attErr }] =
+    await Promise.all([
+      fetchTestsCatalog(),
+      sb
+        .from("test_attempts")
+        .select(
+          "id, test_id, status, total_score, started_at, submitted_at, is_practice, disqualified_at",
+        )
+        .eq("user_id", myProfile.id),
+    ]);
+  if (catErr || attErr) return { error: catErr || attErr };
+  const merged = mergeCatalogWithAttempts(catalog, attempts);
+  testsCatalogCache = merged;
+  return { merged, attempts: attempts || [] };
 }
 
 function classifyTestWindow(test, nowMs = Date.now()) {
@@ -733,29 +1054,14 @@ function mergeCatalogWithAttempts(catalog, attempts) {
     if (!mine && !t.attempt_id) {
       mine = (t.is_practice ? latestPractice : latestReal).get(t.id) || null;
     }
-    return { ...t, myAttempt: mine, windowState: classifyTestWindow(t) };
+    // A practice row says nothing about whether the test itself is live, so
+    // its window state always comes from the test's own dates.
+    const windowState = classifyTestWindow(
+      t.is_practice ? { ...t, lifecycle: undefined } : t,
+    );
+    return { ...t, myAttempt: mine, windowState };
   });
 }
-function reminderKey(testId) {
-  return `jh_reminder_${testId}`;
-}
-function isReminderSet(testId) {
-  try {
-    return localStorage.getItem(reminderKey(testId)) === "1";
-  } catch (e) {
-    return false;
-  }
-}
-function setReminder(testId, on) {
-  try {
-    if (on) localStorage.setItem(reminderKey(testId), "1");
-    else localStorage.removeItem(reminderKey(testId));
-  } catch (e) {
-    /* localStorage unavailable (private browsing etc) — reminder is a
-       best-effort local convenience, never worth erroring over */
-  }
-}
-
 function testCardCta(entry) {
   const a = entry.myAttempt;
   if (entry.is_practice) {
@@ -767,7 +1073,7 @@ function testCardCta(entry) {
     return `<a class="btn btn-sm btn-practice" href="#/exam?test=${encodeURIComponent(entry.id)}&practice=1">Resume practice</a>`;
   }
   if (a && a.status !== "in_progress") {
-    return `<a class="btn btn-sm" href="#/result?attempt=${a.id}">View Report</a> <a class="btn btn-sm btn-secondary" href="#/exam?test=${encodeURIComponent(entry.id)}&practice=1">🔁 Reattempt</a> <button type="button" class="btn btn-sm btn-print" data-print-attempt="${a.id}" title="Preview the question paper with answer key and download it as a PDF">📄 Get Questions PDF</button>`;
+    return `<a class="btn btn-sm" href="#/result?attempt=${a.id}">View Report</a> <button type="button" class="btn btn-sm btn-print" data-print-attempt="${a.id}" title="Preview the question paper with answer key and download it as a PDF">📄 Get Questions PDF</button>`;
   }
   if (entry.windowState === "past") {
     return `<a class="btn btn-sm" href="#/test-details?test=${encodeURIComponent(entry.id)}">View details</a>`;
@@ -805,144 +1111,236 @@ function testCardHtml(entry) {
       : entry.windowState === "past"
         ? `<span class="status-tag closed">🔴 Closed</span>`
         : "";
-  const attemptTag = entry.myAttempt
-    ? `<span class="status-tag ${entry.myAttempt.status}">${entry.myAttempt.status.replace("_", " ")}</span>`
-    : "";
   const practicePill = entry.is_practice
     ? `<span class="practice-pill">🔁 Practice re-attempt</span>`
     : "";
+  const stateBadge = entry.is_practice
+    ? practicePill
+    : `${liveBadge}${lifecycleBadge}`;
   return `
     <div class="test-card ${entry.is_practice ? "test-card-practice" : ""}">
-      <div class="test-card-top">${entry.is_practice ? practicePill : `${liveBadge}${lifecycleBadge}`}${categoryBadge(entry.category)}${attemptTag}</div>
       <h3 class="test-card-title">${escapeHtml(entry.title)}</h3>
-      <div class="test-card-meta">${testCardMeta(entry)}</div>
+      <div class="test-card-meta">${entry.duration_minutes} min${entry.is_practice ? " · Practice" : ""}</div>
       <div class="test-card-cta">${testCardCta(entry)}</div>
     </div>
   `;
 }
 
-function renderTestsCards(entries) {
-  const grid = document.getElementById("testsCardGrid");
-  if (!grid) return;
-  if (!entries.length) {
-    grid.innerHTML = `<div class="empty-state">No tests match this filter yet.</div>`;
-    return;
-  }
-  grid.innerHTML = entries.map(testCardHtml).join("");
-}
-
-function renderHomeTestsToolbar() {
-  const toolbar = document.getElementById("homeTestsToolbar");
-  if (!toolbar) return;
-  toolbar.innerHTML = `
-    <div class="tests-search"><span class="tests-search-icon">⌕</span><input type="search" id="homeTestsSearch" placeholder="Search exams"></div>
-    <div class="segmented tests-status-tabs" id="homeTestsStatusTabs">
-      <button type="button" class="active" data-filter="all">All</button>
-      <button type="button" data-filter="ongoing">Live</button>
-      <button type="button" data-filter="upcoming">Locked</button>
-      <button type="button" data-filter="past">Closed</button>
-    </div>`;
-  toolbar.querySelector("input").addEventListener("input", (event) => {
-    const query = event.target.value.trim().toLowerCase();
-    renderHomeTests(
-      testsCatalogCache.filter(
-        (entry) =>
-          (!query || entry.title.toLowerCase().includes(query)) &&
-          (testsFilterState.status === "all" ||
-            entry.windowState === testsFilterState.status),
-      ),
-    );
-  });
-  toolbar.querySelectorAll("button[data-filter]").forEach((button) => {
-    button.addEventListener("click", () => {
-      toolbar
-        .querySelectorAll("button")
-        .forEach((item) => item.classList.remove("active"));
-      button.classList.add("active");
-      testsFilterState.status = button.dataset.filter;
-      renderHomeTests(testsCatalogCache);
-    });
-  });
-}
-
+/* ---- Home: ONLY live tests ---- */
 function renderHomeTests(entries) {
   const grid = document.getElementById("homeTestsGrid");
   if (!grid) return;
-  const filtered = entries.filter(
-    (entry) =>
-      testsFilterState.status === "all" ||
-      entry.windowState === testsFilterState.status,
+  const live = entries.filter(
+    (entry) => !entry.is_practice && entry.windowState === "ongoing",
   );
-  grid.innerHTML = filtered.length
-    ? filtered.slice(0, 6).map(testCardHtml).join("")
-    : `<div class="empty-state">No exams match this view yet.</div>`;
+  grid.innerHTML = live.length
+    ? live.map(testCardHtml).join("")
+    : `<div class="empty-state">No live test right now.<br><a href="#/tests">See your past &amp; practice tests →</a></div>`;
 }
 
-function applyTestsFilter() {
-  const { status, query } = testsFilterState;
-  const q = query.trim().toLowerCase();
-  const filtered = testsCatalogCache.filter((t) => {
-    if (status !== "all" && t.windowState !== status) return false;
-    if (q && !t.title.toLowerCase().includes(q)) return false;
-    return true;
+/* ---- Tests page: everything attempted (never a live test) + closed tests
+   that can be practised. One numbered row per attempt. ---- */
+function buildPastRows(merged) {
+  const practiceTests = new Set(
+    merged.filter((e) => e.is_practice && e.myAttempt).map((e) => String(e.id)),
+  );
+  const rows = [];
+  merged.forEach((e) => {
+    const a = e.myAttempt;
+    const total = Number(e.total_marks) || 0;
+    const base = {
+      entry: e,
+      attempt: a,
+      title: e.title,
+      category: e.category,
+      total,
+      canPractice: !!e.practice_available,
+    };
+    if (e.is_practice) {
+      if (!a) return;
+      const done = a.status !== "in_progress";
+      rows.push({
+        ...base,
+        kind: "practice",
+        done,
+        score: done ? Number(a.total_score) || 0 : null,
+        date: new Date(a.submitted_at || a.started_at || e.available_until).getTime(),
+        hasPractice: true,
+      });
+      return;
+    }
+    // An attempted test belongs in this history even while its public window
+    // is still live. Only unattempted tests are restricted to closed windows.
+    if (a) {
+      const done = a.status !== "in_progress";
+      rows.push({
+        ...base,
+        kind: "main",
+        done,
+        score: done ? Number(a.total_score) || 0 : null,
+        date: new Date(a.submitted_at || a.started_at || e.available_until).getTime(),
+        hasPractice: practiceTests.has(String(e.id)),
+      });
+    } else if (
+      e.windowState === "past" &&
+      !practiceTests.has(String(e.id)) &&
+      e.practice_available
+    ) {
+      rows.push({
+        ...base,
+        kind: "new",
+        done: false,
+        score: null,
+        date: new Date(e.available_until).getTime(),
+        hasPractice: false,
+      });
+    }
   });
-  renderTestsCards(filtered);
+  return rows;
+}
+
+function pastPct(row) {
+  return row.done && row.total > 0 ? (row.score / row.total) * 100 : null;
+}
+
+function sortPastRows(rows, sort) {
+  const byDate = (a, b) => b.date - a.date;
+  const pctOr = (r, fallback) => {
+    const p = pastPct(r);
+    return p === null ? fallback : p;
+  };
+  const sorters = {
+    newest: byDate,
+    oldest: (a, b) => a.date - b.date,
+    score_desc: (a, b) => pctOr(b, -1) - pctOr(a, -1) || byDate(a, b),
+    score_asc: (a, b) => pctOr(a, 1e9) - pctOr(b, 1e9) || byDate(a, b),
+    name: (a, b) => a.title.localeCompare(b.title) || byDate(a, b),
+  };
+  return rows.slice().sort(sorters[sort] || byDate);
+}
+
+function pastRowActions(row) {
+  const a = row.attempt;
+  const test = encodeURIComponent(row.entry.id);
+  const btns = [];
+  if (row.kind === "new") {
+    btns.push(`<a class="btn btn-primary btn-sm" href="#/exam?test=${test}&practice=1">▶ Start practice</a>`);
+  } else if (!row.done) {
+    btns.push(
+      row.kind === "practice"
+        ? `<a class="btn btn-primary btn-sm" href="#/exam?test=${test}&practice=1">▶ Resume practice</a>`
+        : `<a class="btn btn-primary btn-sm" href="#/exam?test=${test}">▶ Resume test</a>`,
+    );
+  } else {
+    btns.push(`<a class="btn btn-sm" href="#/result?attempt=${a.id}">View report</a>`);
+    if (row.canPractice && (row.kind === "practice" || !row.hasPractice)) {
+      btns.push(
+        `<a class="btn btn-sm btn-practice" href="#/exam?test=${test}&practice=1">🔁 ${row.kind === "practice" ? "Practice again" : "Practice"}</a>`,
+      );
+    }
+    btns.push(
+      `<button type="button" class="btn btn-sm btn-print" data-print-attempt="${a.id}" title="Preview the question paper with answer key and download it as a PDF">📄 Questions PDF</button>`,
+    );
+  }
+  return btns.join(" ");
+}
+
+function pastRowHtml(row, serial) {
+  const tag =
+    row.kind === "main"
+      ? `<span class="past-type main">Live test</span>`
+      : row.kind === "practice"
+        ? `<span class="past-type practice">🔁 Practice</span>`
+        : `<span class="past-type new">Not attempted</span>`;
+  const notRanked =
+    row.kind === "main" && row.attempt?.disqualified_at
+      ? `<span class="status-tag dq-tag">Not ranked</span>`
+      : "";
+  const pct = pastPct(row);
+  const when =
+    row.kind === "new"
+      ? `Closed ${formatDateTime(row.entry.available_until)}`
+      : !row.done
+        ? "In progress"
+        : `${row.kind === "practice" ? "Practised" : "Submitted"} ${formatDateTime(row.attempt.submitted_at)}`;
+  const score = row.done
+    ? `<strong>${row.score}</strong><span>/ ${row.total || "—"}</span>${pct === null ? "" : `<em>${pct.toFixed(1)}%</em>`}`
+    : `<span class="past-score-none">—</span>`;
+  const note =
+    row.kind === "practice"
+      ? "No rank or percentile"
+      : row.kind === "new"
+        ? "Practice only — no rank or percentile"
+        : "";
+  return `
+    <article class="past-row kind-${row.kind}">
+      <div class="past-serial" aria-label="Number ${serial}">${serial}</div>
+      <div class="past-main">
+        <h3 class="past-title">${escapeHtml(row.title)}</h3>
+        <div class="past-tags">${tag}${categoryBadge(row.category)}${notRanked}</div>
+        <div class="past-meta">${when} · ${row.entry.duration_minutes} min${note ? ` · ${note}` : ""}</div>
+      </div>
+      <div class="past-score">${score}</div>
+      <div class="past-actions">${pastRowActions(row)}</div>
+    </article>`;
+}
+
+function renderPastTests() {
+  const grid = document.getElementById("testsCardGrid");
+  if (!grid) return;
+  const q = testsView.q.trim().toLowerCase();
+  const all = buildPastRows(testsCatalogCache);
+  let rows = all.filter(
+    (r) =>
+      (testsView.kind === "all" || r.kind === testsView.kind) &&
+      (!q || r.title.toLowerCase().includes(q)),
+  );
+  rows = sortPastRows(rows, testsView.sort);
+  if (!rows.length) {
+    grid.innerHTML = `<div class="empty-state">${
+      all.length
+        ? "Nothing matches this view."
+        : "No past tests yet. Tests you attempt appear here once they close, and closed tests can be practised."
+    }</div>`;
+    return;
+  }
+  grid.innerHTML = rows.map((r, i) => pastRowHtml(r, i + 1)).join("");
 }
 
 async function loadTestsCatalog() {
   const grid = document.getElementById("testsCardGrid");
   if (!grid) return;
-
   grid.innerHTML = `<div class="empty-state">Loading…</div>`;
-
-  const { data: catalog, error } = await fetchTestsCatalog();
-
+  const { error } = await loadCatalogMerged();
   if (error) {
-    console.error("Student dashboard tests error:", error);
-    grid.innerHTML = `
-      <div class="error-box">
-        ${escapeHtml(friendlyError(error))}
-      </div>
-    `;
+    console.error("Student tests error:", error);
+    grid.innerHTML = `<div class="error-box">${escapeHtml(friendlyError(error))}</div>`;
     return;
   }
-
-  testsCatalogCache = catalog || [];
-  applyTestsFilter();
+  renderPastTests();
 }
+
 function setupTestsCatalogListeners() {
   const searchInput = document.getElementById("testsSearchInput");
   const tabs = document.getElementById("testsStatusTabs");
-  const grid = document.getElementById("testsCardGrid");
-  if (!searchInput || !tabs || !grid) return;
+  const sortSelect = document.getElementById("testsSortSelect");
+  if (!searchInput || !tabs || !sortSelect) return;
 
   searchInput.addEventListener("input", (e) => {
-    testsFilterState.query = e.target.value;
-    applyTestsFilter();
+    testsView.q = e.target.value;
+    renderPastTests();
   });
-
   tabs.addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-filter]");
     if (!btn) return;
-    tabs
-      .querySelectorAll("button")
-      .forEach((b) => b.classList.remove("active"));
+    tabs.querySelectorAll("button").forEach((b) => b.classList.remove("active"));
     btn.classList.add("active");
-    testsFilterState.status = btn.dataset.filter;
-    applyTestsFilter();
+    testsView.kind = btn.dataset.filter;
+    renderPastTests();
   });
-
-  grid.addEventListener("click", (e) => {
-    const btn = e.target.closest(".js-remind");
-    if (!btn) return;
-    const id = btn.dataset.testId;
-    const nowSet = !isReminderSet(id);
-    setReminder(id, nowSet);
-    toast(
-      nowSet ? "We'll remind you when this test opens" : "Reminder removed",
-    );
-    const entry = testsCatalogCache.find((t) => String(t.id) === String(id));
-    if (entry) btn.outerHTML = testCardCta(entry);
+  sortSelect.addEventListener("change", (e) => {
+    testsView.sort = e.target.value;
+    renderPastTests();
   });
 }
 
@@ -1051,6 +1449,7 @@ function renderHomeSpotlight(merged) {
   const candidates = merged
     .filter(
       (t) =>
+        !t.is_practice &&
         t.windowState === "ongoing" &&
         (!t.myAttempt || t.myAttempt.status === "in_progress"),
     )
@@ -1061,7 +1460,7 @@ function renderHomeSpotlight(merged) {
       <div class="home-spotlight-empty">
         <div class="pes-icon">📭</div>
         <h2>No live test right now</h2>
-        <p>Check the Tests tab for upcoming tests, or revisit ones you've already completed.</p>
+        <p>Closed tests move to the Tests tab, where you can review your attempts and practise them.</p>
         <a href="#/tests" class="btn btn-primary btn-sm">Go to Tests</a>
       </div>
     `;
@@ -1096,7 +1495,11 @@ async function renderHomeStats(merged, attempts) {
   if (!el) return;
 
   // Re-attempts are personal practice: they never count towards totals.
-  const totalTests = merged.filter((t) => !t.is_practice).length;
+  // Closed tests the student never took are only practice material; they
+  // don't count towards "total tests".
+  const totalTests = merged.filter(
+    (t) => !t.is_practice && (t.windowState !== "past" || t.myAttempt),
+  ).length;
   const mainAttempts = attempts.filter((a) => !a.is_practice);
   const attemptedCount = new Set(mainAttempts.map((a) => a.test_id)).size;
 
@@ -1139,24 +1542,13 @@ async function enterHomeView() {
   spotlightEl.innerHTML = `<div class="empty-state">Loading…</div>`;
   statsEl.innerHTML = "";
 
-  const [{ data: catalog, error: catErr }, { data: attempts, error: attErr }] =
-    await Promise.all([
-      fetchTestsCatalog(),
-      sb
-        .from("test_attempts")
-        .select("id, test_id, status, total_score, started_at, submitted_at, is_practice, disqualified_at")
-        .eq("user_id", myProfile.id),
-    ]);
+  const { merged, attempts, error: loadErr } = await loadCatalogMerged();
 
-  if (catErr || attErr) {
-    spotlightEl.innerHTML = `<div class="error-box">${escapeHtml(friendlyError(catErr || attErr))}</div>`;
+  if (loadErr) {
+    spotlightEl.innerHTML = `<div class="error-box">${escapeHtml(friendlyError(loadErr))}</div>`;
     return;
   }
 
-  const merged = mergeCatalogWithAttempts(catalog, attempts);
-  testsCatalogCache = merged;
-  testsFilterState = { status: "all", query: "" };
-  renderHomeTestsToolbar();
   renderHomeTests(merged);
   renderHomeSpotlight(merged);
   await renderHomeStats(merged, attempts || []);
@@ -1469,6 +1861,8 @@ function setupAdminTestListeners() {
         instructions:
           document.getElementById("instructionsInput").value.trim() || null,
         category: document.getElementById("categoryInput").value,
+        practice_category: document.getElementById("practiceCategoryInput").value,
+        practice_only: document.getElementById("practiceOnlyInput").checked,
         duration_minutes: parseInt(
           document.getElementById("durationInput").value,
           10,
@@ -1690,6 +2084,7 @@ async function enterAdminTestView() {
   }
   document.getElementById("notAdminNotice").style.display = "none";
   document.getElementById("adminMainContent").style.display = "block";
+  await loadAdminTestRequests();
 
   const testId = qs("test");
   if (testId) {
@@ -1699,6 +2094,40 @@ async function enterAdminTestView() {
     const later = new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000);
     document.getElementById("fromInput").value = toLocalInputValue(now);
     document.getElementById("untilInput").value = toLocalInputValue(later);
+  }
+
+  async function loadAdminTestRequests() {
+    const target = document.getElementById("studentRequestsAdminList");
+    if (!target) return;
+    const { data, error } = await sb.from("test_requests")
+      .select("id, student_id, exam, subjects, chapters, topics, difficulty, question_source, question_count, duration_minutes, preferred_at, student_note, status, created_at, profiles(full_name, email)")
+      .order("created_at", { ascending: false });
+    if (error) {
+      target.innerHTML = `<div class="error-box">${escapeHtml(friendlyError(error))}</div>`;
+      return;
+    }
+    if (!data?.length) {
+      target.innerHTML = `<div class="empty-state">No student requests yet.</div>`;
+      return;
+    }
+    const statuses = ["Pending", "Under Review", "Approved", "Test Created", "Scheduled", "Rejected", "Cancelled"];
+    target.innerHTML = data.map((request) => `
+      <article class="request-row admin-request-row">
+        <div><strong>${escapeHtml(request.profiles?.full_name || request.profiles?.email || request.student_id)}</strong><div class="text-muted">${escapeHtml(request.exam)} · ${escapeHtml((request.subjects || []).join(", "))}</div><small>${escapeHtml((request.chapters || []).join(", ") || "Whole syllabus")}</small></div>
+        <div><strong>${escapeHtml(formatDateTime(request.preferred_at))}</strong><div class="text-muted">${request.question_count} questions · ${request.duration_minutes} min</div></div>
+        <label class="field"><span class="sr-only">Request status</span><select data-request-status="${request.id}">${statuses.map((status) => `<option ${status === request.status ? "selected" : ""}>${status}</option>`).join("")}</select></label>
+      </article>`).join("");
+    target.querySelectorAll("[data-request-status]").forEach((select) => select.addEventListener("change", async () => {
+      select.disabled = true;
+      const { error: updateError } = await sb.from("test_requests").update({ status: select.value, updated_at: new Date().toISOString() }).eq("id", select.dataset.requestStatus);
+      select.disabled = false;
+      if (updateError) {
+        toast(friendlyError(updateError), "error");
+        await loadAdminTestRequests();
+        return;
+      }
+      toast("Request status updated.", "success");
+    }));
   }
 }
 
@@ -1720,6 +2149,8 @@ async function loadExistingTest(testId) {
   document.getElementById("descInput").value = data.description || "";
   document.getElementById("instructionsInput").value = data.instructions || "";
   document.getElementById("categoryInput").value = data.category || "JEE Main";
+  document.getElementById("practiceCategoryInput").value = data.practice_category || "all";
+  document.getElementById("practiceOnlyInput").checked = data.practice_only === true;
   document.getElementById("durationInput").value = data.duration_minutes;
   document.getElementById("fromInput").value = toLocalInputValue(
     data.available_from,
@@ -1763,7 +2194,57 @@ function renderShareCard() {
     ? `Students see this test as Locked and it goes live automatically. Publishes ${formatDateTime(currentTest.available_from)} · closes ${formatDateTime(currentTest.available_until)}.`
     : `Hidden from students until it goes live automatically on ${formatDateTime(currentTest.available_from)} · closes ${formatDateTime(currentTest.available_until)}.`;
   renderVisibilityButton(showWhenLocked);
+  renderPracticeButton(currentTest.practice_enabled !== false);
 }
+
+function renderPracticeButton(enabled) {
+  const btn = document.getElementById("practiceToggleBtn");
+  const hint = document.getElementById("practiceHint");
+  if (!btn) return;
+  btn.classList.toggle("is-shown", enabled);
+  btn.classList.toggle("is-hidden", !enabled);
+  btn.setAttribute("aria-pressed", String(enabled));
+  btn.querySelector(".visibility-btn-icon").textContent = enabled ? "👁" : "🚫";
+  btn.querySelector(".visibility-btn-label").textContent = enabled ? "Shown" : "Hidden";
+  btn.title = enabled
+    ? "Click to hide this test from the practice list after it closes"
+    : "Click to let everyone practise this test after it closes";
+  if (hint)
+    hint.textContent = enabled
+      ? "Shown: once this test closes, every student can take it as a practice test — no rank or percentile. Click to hide it."
+      : "Hidden: after it closes, nobody can practise this test. Click to show it as a practice test.";
+}
+
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest("#practiceToggleBtn");
+  if (!btn || !currentTest || btn.disabled) return;
+  const next = currentTest.practice_enabled === false; // flip
+  btn.disabled = true;
+  const { data, error } = await sb
+    .from("tests")
+    .update({ practice_enabled: next })
+    .eq("id", currentTest.id)
+    .select()
+    .single();
+  btn.disabled = false;
+  if (error) {
+    toast(
+      /practice_enabled/.test(error.message || "")
+        ? "Run migration_practice.sql in Supabase first."
+        : friendlyError(error),
+      "error",
+    );
+    return;
+  }
+  currentTest = data;
+  renderShareCard();
+  toast(
+    next
+      ? "Everyone can practise this test once it closes"
+      : "Practice is hidden for this test",
+    "success",
+  );
+});
 
 function renderVisibilityButton(showWhenLocked) {
   const btn = document.getElementById("visibilityToggleBtn");
@@ -2184,7 +2665,7 @@ function pvRenderQuestion() {
               (r) =>
                 `<li>${escapeHtml(r.reason)}${r.details ? ` — ${escapeHtml(r.details)}` : ""} <small>· ${escapeHtml(r.profiles?.full_name || "Student")}</small></li>`,
             )
-            .join("")}</ul></div>`
+            .join("")}</ul><button type="button" class="btn btn-sm btn-success js-pv-fixed">✓ Mark as fixed</button></div>`
         : ""
     }
     ${questionImageHtml(q.image_url)}
@@ -2210,6 +2691,12 @@ function pvRenderQuestion() {
   card
     .querySelector(".js-pv-remove")
     .addEventListener("click", () => pvRemoveQuestion(q));
+  card.querySelector(".js-pv-fixed")?.addEventListener("click", async () => {
+    if (await resolveQuestionReports(q.id)) {
+      pvRenderTabs();
+      pvRenderQuestion();
+    }
+  });
   renderMath(card);
   pvRenderPalette();
   document.getElementById("adminPreviewOverlay").scrollTo({ top: 0 });
@@ -2395,10 +2882,11 @@ async function paginatePaper(blocks) {
   }
 }
 
-function paperPagesHtml(pages, title, { wrap }) {
+function paperPagesHtml(pages, title, { wrap, only = null }) {
   return pages
     .map((p, i) => {
-      const sheet = `<section class="print-page ${i > 0 ? "print-page-next" : ""}" aria-label="Page ${i + 1} of ${pages.length}">
+      if (only !== null && i !== only) return "";
+      const sheet = `<section class="print-page" aria-label="Page ${i + 1} of ${pages.length}">
         <div class="print-page-body">${p.join("")}</div>
         <div class="print-page-foot"><span>${escapeHtml(title || "")}</span><span>Page ${i + 1} of ${pages.length}</span></div>
       </section>`;
@@ -2456,15 +2944,177 @@ async function openPrintPreview(blocks, title) {
   dl.addEventListener("click", (e) => downloadPaperPdf(title, e.currentTarget));
 }
 
-// One click, one file: renders the previewed paper to a real PDF and saves it
-// straight to the user's device — no print dialog. The paper is cloned into an
-// off-screen A4-width box first so the file looks the same in light/dark mode
-// and on phones. Falls back to the browser print dialog only if the PDF
-// library could not be loaded.
+/* ---- PDF export -------------------------------------------------------
+   Each page is drawn once and stored as ONE image per PDF page, in order, so
+   the file always has exactly the pages you saw in the preview — nothing is
+   skipped or split. Text pages are saved as 1-bit black & white and deflated
+   (about 15-25 KB a page); only pages that contain a picture fall back to a
+   greyscale JPEG. The PDF container itself is written here, so the only
+   outside piece is html2canvas, which draws the page. ------------------- */
+const PDF_A4 = { w: 595.28, h: 841.89 }; // points
+const PDF_TEXT_SCALE = 1.6; // ≈ 150 dpi — crisp 1-bit text
+const PDF_PHOTO_SCALE = 1.4;
+
+function concatBytes(chunks) {
+  const out = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
+  let at = 0;
+  chunks.forEach((c) => {
+    out.set(c, at);
+    at += c.length;
+  });
+  return out;
+}
+
+async function deflateBytes(bytes) {
+  if (typeof CompressionStream !== "function") return null;
+  const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream("deflate"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+// PDF "RunLengthDecode" — only used where CompressionStream is unavailable.
+function runLengthBytes(src) {
+  const out = [];
+  let i = 0;
+  while (i < src.length) {
+    let run = 1;
+    while (i + run < src.length && run < 128 && src[i + run] === src[i]) run++;
+    if (run >= 2) {
+      out.push(257 - run, src[i]);
+      i += run;
+    } else {
+      let j = i + 1;
+      while (j < src.length && j - i < 128 && !(j + 1 < src.length && src[j] === src[j + 1])) j++;
+      out.push(j - i - 1);
+      for (let k = i; k < j; k++) out.push(src[k]);
+      i = j;
+    }
+  }
+  out.push(128);
+  return Uint8Array.from(out);
+}
+
+// Greyscale → 1 bit per pixel, 1 = white, rows padded to whole bytes.
+function canvasToBilevel(canvas, threshold = 185) {
+  const w = canvas.width;
+  const h = canvas.height;
+  const px = canvas.getContext("2d").getImageData(0, 0, w, h).data;
+  const rowBytes = (w + 7) >> 3;
+  const bits = new Uint8Array(rowBytes * h).fill(0xff);
+  for (let y = 0; y < h; y++) {
+    let p = y * w * 4;
+    const row = y * rowBytes;
+    for (let x = 0; x < w; x++, p += 4) {
+      const lum = (px[p] * 299 + px[p + 1] * 587 + px[p + 2] * 114) / 1000;
+      if (lum < threshold) bits[row + (x >> 3)] &= ~(0x80 >> (x & 7));
+    }
+  }
+  return { bits, w, h };
+}
+
+async function canvasToJpegBytes(canvas, quality = 0.55) {
+  const blob = await new Promise((res) => canvas.toBlob(res, "image/jpeg", quality));
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
+async function encodePdfPage(canvas, hasPicture) {
+  if (hasPicture) {
+    return { kind: "jpeg", w: canvas.width, h: canvas.height, bytes: await canvasToJpegBytes(canvas) };
+  }
+  const { bits, w, h } = canvasToBilevel(canvas);
+  let bytes = await deflateBytes(bits);
+  let filter = "/FlateDecode";
+  if (!bytes) {
+    bytes = runLengthBytes(bits);
+    filter = "/RunLengthDecode";
+  }
+  return { kind: "bw", w, h, bytes, filter };
+}
+
+// A minimal, valid PDF 1.4: one A4 page per image, full-bleed.
+function buildPdfFile(pages, title) {
+  const enc = new TextEncoder();
+  const chunks = [];
+  const offsets = [];
+  let offset = 0;
+  const push = (data) => {
+    const bytes = typeof data === "string" ? enc.encode(data) : data;
+    chunks.push(bytes);
+    offset += bytes.length;
+  };
+  const startObj = (id) => {
+    offsets[id] = offset;
+    push(`${id} 0 obj\n`);
+  };
+  const safeTitle = String(title || "Question paper")
+    .replace(/[^\x20-\x7E]/g, "")
+    .replace(/[()\\]/g, "");
+  const first = 4;
+  const pageId = (i) => first + i * 3;
+  const contentId = (i) => first + i * 3 + 1;
+  const imageId = (i) => first + i * 3 + 2;
+
+  push(Uint8Array.from([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34, 0x0a, 0x25, 0xe2, 0xe3, 0xcf, 0xd3, 0x0a])); // %PDF-1.4 + binary marker
+  startObj(1);
+  push("<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+  startObj(2);
+  push(`<< /Type /Pages /Kids [${pages.map((_, i) => `${pageId(i)} 0 R`).join(" ")}] /Count ${pages.length} >>\nendobj\n`);
+  startObj(3);
+  push(`<< /Title (${safeTitle}) /Producer (JEE Hustlers) /Creator (JEE Hustlers) >>\nendobj\n`);
+
+  pages.forEach((pg, i) => {
+    startObj(pageId(i));
+    push(
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${PDF_A4.w} ${PDF_A4.h}] /Resources << /XObject << /Im0 ${imageId(i)} 0 R >> >> /Contents ${contentId(i)} 0 R >>\nendobj\n`,
+    );
+    const draw = `q ${PDF_A4.w} 0 0 ${PDF_A4.h} 0 0 cm /Im0 Do Q`;
+    startObj(contentId(i));
+    push(`<< /Length ${draw.length} >>\nstream\n${draw}\nendstream\nendobj\n`);
+    startObj(imageId(i));
+    const dict =
+      pg.kind === "jpeg"
+        ? `/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode`
+        : `/ColorSpace /DeviceGray /BitsPerComponent 1 /Interpolate true /Filter ${pg.filter}`;
+    push(`<< /Type /XObject /Subtype /Image /Width ${pg.w} /Height ${pg.h} ${dict} /Length ${pg.bytes.length} >>\nstream\n`);
+    push(pg.bytes);
+    push("\nendstream\nendobj\n");
+  });
+
+  const count = first + pages.length * 3;
+  const xrefAt = offset;
+  let xref = `xref\n0 ${count}\n0000000000 65535 f \n`;
+  for (let id = 1; id < count; id++) xref += `${String(offsets[id]).padStart(10, "0")} 00000 n \n`;
+  push(xref);
+  push(`trailer\n<< /Size ${count} /Root 1 0 R /Info 3 0 R >>\nstartxref\n${xrefAt}\n%%EOF\n`);
+  return concatBytes(chunks);
+}
+
+function saveBytesAsFile(bytes, filename, mime) {
+  const url = URL.createObjectURL(new Blob([bytes], { type: mime }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 15000);
+}
+
+function showPdfProgress() {
+  const box = document.createElement("div");
+  box.className = "pdf-progress";
+  box.setAttribute("role", "status");
+  box.innerHTML = `<div class="pdf-progress-card"><div class="pdf-progress-spinner"></div><strong id="pdfProgressText">Preparing PDF…</strong><small>Keep this tab open — it only takes a moment.</small></div>`;
+  document.body.appendChild(box);
+  return {
+    set: (text) => (box.querySelector("#pdfProgressText").textContent = text),
+    remove: () => box.remove(),
+  };
+}
+
 async function downloadPaperPdf(title, button) {
   const state = printPreviewState;
   if (!state?.pages?.length) return;
-  if (typeof window.html2pdf !== "function") {
+  if (typeof window.html2canvas !== "function") {
     toast("PDF engine unavailable — opening the print dialog instead. Choose “Save as PDF”.", "error");
     window.print();
     return;
@@ -2474,46 +3124,48 @@ async function downloadPaperPdf(title, button) {
     button.disabled = true;
     button.textContent = "Preparing PDF…";
   }
-  // The same fixed A4 pages shown in the preview are rebuilt off-screen at
-  // full size (no zoom), one page per PDF page.
-  const host = document.createElement("div");
-  host.className = "pdf-export-host";
-  const root = document.createElement("div");
-  root.className = "print-export-pages";
-  root.innerHTML = paperPagesHtml(state.pages, state.title, { wrap: false });
-  host.appendChild(root);
-  document.body.appendChild(host);
+  const progress = showPdfProgress();
+  // Off-screen, full-size (unscaled) page the browser can draw from.
+  const stage = document.createElement("div");
+  stage.className = "pdf-stage";
+  document.body.appendChild(stage);
   const slug =
     String(title || "question-paper")
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "") || "question-paper";
   try {
-    await window
-      .html2pdf()
-      .set({
-        margin: 0,
-        filename: `${slug}-questions.pdf`,
-        image: { type: "jpeg", quality: 0.96 },
-        html2canvas: {
-          scale: 2,
-          useCORS: true,
-          backgroundColor: "#ffffff",
-          windowWidth: PAPER.W,
-          scrollX: 0,
-          scrollY: 0,
-        },
-        jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-        pagebreak: { mode: ["css"], before: ".print-page-next" },
-      })
-      .from(root)
-      .save();
-    toast("Your PDF has been downloaded", "success");
+    const encoded = [];
+    for (let i = 0; i < state.pages.length; i++) {
+      progress.set(`Page ${i + 1} of ${state.pages.length}…`);
+      stage.innerHTML = paperPagesHtml(state.pages, state.title, { wrap: false, only: i });
+      const sheet = stage.querySelector(".print-page");
+      const hasPicture = /<img\b/i.test(state.pages[i].join(""));
+      await waitForPaperAssets(sheet);
+      const canvas = await window.html2canvas(sheet, {
+        scale: hasPicture ? PDF_PHOTO_SCALE : PDF_TEXT_SCALE,
+        backgroundColor: "#ffffff",
+        useCORS: true,
+        logging: false,
+        scrollX: 0,
+        scrollY: 0,
+        windowWidth: PAPER.W,
+        windowHeight: PAPER.H,
+      });
+      encoded.push(await encodePdfPage(canvas, hasPicture));
+      canvas.width = canvas.height = 0; // release the memory straight away
+    }
+    progress.set("Saving…");
+    const pdf = buildPdfFile(encoded, state.title);
+    saveBytesAsFile(pdf, `${slug}-questions.pdf`, "application/pdf");
+    const size = pdf.length < 1024 * 1024 ? `${Math.max(1, Math.round(pdf.length / 1024))} KB` : `${(pdf.length / 1048576).toFixed(1)} MB`;
+    toast(`PDF downloaded · ${encoded.length} page${encoded.length === 1 ? "" : "s"} · ${size}`, "success");
   } catch (err) {
     console.error("PDF export failed:", err);
     toast("Couldn't create the PDF. Please try again.", "error");
   } finally {
-    host.remove();
+    stage.remove();
+    progress.remove();
     if (button) {
       button.disabled = false;
       button.innerHTML = original;
@@ -2719,8 +3371,70 @@ function resultsInsightsHtml() {
       ${tile("Median time", live.length ? chMinutesLabel(stats.medianTime) : "—", live.length ? `Median score ${Math.round(stats.medianScore * 10) / 10}` : "")}
       ${fastest ? tile("Fastest finish", chMinutesLabel(fastest.total_time_seconds), escapeHtml(fastest.full_name || "Student")) : ""}
       ${slowest ? tile("Slowest finish", chMinutesLabel(slowest.total_time_seconds), escapeHtml(slowest.full_name || "Student")) : ""}
-      ${tile("Needs review", flaggedCount, flaggedCount ? "Suspiciously quick" : "No unusual timing", flaggedCount ? "alert" : "")}
-    </div>`;
+      ${
+        flaggedCount
+          ? `<button type="button" class="insight-tile alert insight-tile-btn js-review-flagged" title="Show who was flagged and why">
+               <span>Needs review</span><strong>${flaggedCount}</strong><small>Tap to see who &amp; why ›</small>
+             </button>`
+          : tile("Needs review", 0, "No unusual timing")
+      }
+    </div>
+    ${reviewPanelHtml()}`;
+}
+
+// Everyone the timing hints flagged, with the reasons spelled out, right above
+// the table. The hints never remove anyone — the admin always decides.
+function reviewPanelHtml() {
+  const flagged = adminResultsRows
+    .filter((r) => adminResultsFlags.has(r.attempt_id))
+    .sort(
+      (a, b) =>
+        (adminResultsFlags.get(a.attempt_id).level === "high" ? 0 : 1) -
+          (adminResultsFlags.get(b.attempt_id).level === "high" ? 0 : 1) ||
+        a.total_time_seconds - b.total_time_seconds,
+    );
+  if (!flagged.length) return "";
+  const items = flagged
+    .map((r) => {
+      const fl = adminResultsFlags.get(r.attempt_id);
+      return `
+      <div class="review-item level-${fl.level}">
+        <div class="review-who">
+          <strong>${escapeHtml(r.full_name || "Student")}</strong>
+          <span class="flag-chip ${fl.level}">${fl.level === "high" ? "⚠ Very fast" : "Quick"}</span>
+        </div>
+        <div class="review-facts">Score <b>${r.total_score}</b> / ${r.total_marks} · Time <b>${chMinutesLabel(r.total_time_seconds)}</b> · ${r.correct_count} correct, ${r.wrong_count} wrong</div>
+        <ul class="review-reasons">${fl.reasons.map((x) => `<li>${escapeHtml(x)}</li>`).join("")}</ul>
+        <div class="review-actions">
+          <button type="button" class="btn btn-sm js-flag-open" data-id="${r.attempt_id}">Subject-wise time</button>
+          <a class="btn btn-sm" href="#/result?attempt=${encodeURIComponent(r.attempt_id)}">Report</a>
+          <button type="button" class="btn btn-sm btn-danger js-dq" data-id="${r.attempt_id}" data-name="${escapeHtml(r.full_name || "this student")}">Remove</button>
+        </div>
+      </div>`;
+    })
+    .join("");
+  return `
+    <section class="review-panel" id="reviewPanel" aria-label="Students who need review">
+      <div class="review-panel-head">
+        <div>
+          <strong>⚠ Needs review · ${flagged.length}</strong>
+          <small>Automatic timing hints, not proof — check the answers before removing anyone.</small>
+        </div>
+        <button type="button" class="btn btn-sm js-review-filter">Show only these in the table</button>
+      </div>
+      <div class="review-list">${items}</div>
+    </section>`;
+}
+
+function showFlaggedOnly(scrollTo) {
+  adminResultsView.filter = "flagged";
+  const select = document.getElementById("resultsFilter");
+  if (select) select.value = "flagged";
+  renderStudentResultsTable();
+  const target = scrollTo
+    ? document.querySelector(`[data-detail="${CSS.escape(scrollTo)}"]`)
+    : document.getElementById("studentResultsTable");
+  target?.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
 function resultDetailHtml(r) {
@@ -2893,6 +3607,16 @@ function bindResultsControls() {
     renderStudentResultsTable();
   });
   card.addEventListener("click", async (e) => {
+    if (e.target.closest(".js-review-flagged"))
+      return document
+        .getElementById("reviewPanel")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (e.target.closest(".js-review-filter")) return showFlaggedOnly(null);
+    const openBtn = e.target.closest(".js-flag-open");
+    if (openBtn) {
+      adminExpandedRows.add(openBtn.dataset.id);
+      return showFlaggedOnly(openBtn.dataset.id);
+    }
     const toggle = e.target.closest(".js-toggle-detail");
     if (toggle) {
       const id = toggle.dataset.id;
@@ -3085,6 +3809,54 @@ async function reinstateAttempt(id, button) {
   await refreshAdminResultViews();
 }
 
+function groupedReports() {
+  const groups = new Map();
+  adminReports.forEach((report) => {
+    if (!groups.has(report.question_id))
+      groups.set(report.question_id, { questionId: report.question_id, question: report.questions, items: [] });
+    groups.get(report.question_id).items.push(report);
+  });
+  return [...groups.values()];
+}
+
+// "Done / Fixed": the admin has dealt with the question, so its reports go away.
+async function resolveQuestionReports(questionId) {
+  const { data, error } = await sb.rpc("admin_resolve_question_reports", {
+    p_question_id: questionId,
+  });
+  if (error) {
+    toast(friendlyError(error), "error");
+    return false;
+  }
+  toast(`Marked as fixed — ${data?.resolved ?? 0} report(s) cleared`, "success");
+  await loadReports();
+  return true;
+}
+
+function reportCardHtml(group) {
+  const question = group.question;
+  const exists = adminQuestionsCache.some((item) => item.id === group.questionId);
+  const reasons = group.items
+    .map(
+      (report) =>
+        `<li><b>${escapeHtml(report.reason)}</b>${report.details ? ` — ${escapeHtml(report.details)}` : ""} <small>· ${escapeHtml(report.profiles?.full_name || "Student")} · ${formatDateTime(report.created_at)}</small></li>`,
+    )
+    .join("");
+  return `
+    <article class="report-card">
+      <div class="report-card-head">
+        <strong>${escapeHtml(question?.subject || "Question")} · ${question?.question_type === "integer" ? "Integer" : "MCQ"}</strong>
+        <span class="status-tag dq-tag">${group.items.length} report${group.items.length === 1 ? "" : "s"}</span>
+      </div>
+      <div class="question-text report-question-text">${escapeHtml(question?.question_text || "This question has been removed.")}</div>
+      <ul class="report-reasons">${reasons}</ul>
+      <div class="report-actions">
+        <button type="button" class="btn btn-sm btn-primary js-report-preview" data-question="${group.questionId}" ${exists ? "" : "disabled"}>👁 Preview &amp; edit</button>
+        <button type="button" class="btn btn-sm btn-success js-report-fixed" data-question="${group.questionId}">✓ Done / Fixed</button>
+      </div>
+    </article>`;
+}
+
 async function loadReports() {
   const list = document.getElementById("reportsList");
   if (!currentTest || !list) return;
@@ -3100,36 +3872,24 @@ async function loadReports() {
     return;
   }
   adminReports = data || [];
-  const tag = document.getElementById("reportsCountTag");
-  if (tag)
-    tag.textContent = adminReports.length
-      ? `${adminReports.length} report${adminReports.length === 1 ? "" : "s"}`
-      : "";
+  const groups = groupedReports();
+  document.getElementById("reportsCountTag").textContent = groups.length
+    ? `${groups.length} question${groups.length === 1 ? "" : "s"} · ${adminReports.length} report${adminReports.length === 1 ? "" : "s"}`
+    : "";
   renderAdminSummary();
-  list.innerHTML = !adminReports.length
-    ? `<div class="empty-state">No question reports yet.</div>`
-    : adminReports
-        .map((r) => {
-          const exists = adminQuestionsCache.some((q) => q.id === r.question_id);
-          return `
-    <div class="list-row report-row">
-      <div class="list-row-main">
-        <div class="list-row-title">${escapeHtml(r.reason)}</div>
-        <div class="list-row-meta">${escapeHtml(r.profiles?.full_name || "Student")} · ${formatDateTime(r.created_at)}${r.questions?.subject ? " · " + escapeHtml(r.questions.subject) : ""}${r.details ? " · " + escapeHtml(r.details) : ""}</div>
-        <div class="question-text report-question-text">${escapeHtml(r.questions?.question_text || "This question has been removed.")}</div>
-      </div>
-      <div class="list-row-actions">
-        <button type="button" class="btn btn-sm btn-primary js-report-preview" data-question="${r.question_id}" ${exists ? "" : "disabled"}>👁 Preview question</button>
-      </div>
-    </div>`;
-        })
-        .join("");
+  list.innerHTML = groups.length
+    ? groups.map(reportCardHtml).join("")
+    : `<div class="empty-state">No reported questions. Nice and clean ✓</div>`;
   renderMath(list);
 }
 
-document.addEventListener("click", (e) => {
-  const btn = e.target.closest(".js-report-preview");
-  if (btn && !btn.disabled) openTestPreview(btn.dataset.question);
+document.addEventListener("click", async (event) => {
+  const preview = event.target.closest(".js-report-preview");
+  if (preview && !preview.disabled) return openTestPreview(preview.dataset.question);
+  const fixed = event.target.closest(".js-report-fixed");
+  if (!fixed) return;
+  fixed.disabled = true;
+  if (!(await resolveQuestionReports(fixed.dataset.question))) fixed.disabled = false;
 });
 
 /* =========================================================================
@@ -3274,6 +4034,13 @@ async function flushTimeDeltas({ awaitCompletion = false } = {}) {
 
 function setupExamStaticListeners() {
   document.getElementById("beginBtn").addEventListener("click", onBegin);
+  document.getElementById("beginEnableNotificationsBtn").addEventListener("click", async () => {
+    const current = await pushNotifications.request();
+    const status = document.getElementById("beginNotificationStatus");
+    status.textContent = current === "granted"
+      ? "Notifications enabled successfully. You can start the test now."
+      : NOTIFICATION_BLOCKED_HELP;
+  });
   document
     .getElementById("submitTestBtn")
     .addEventListener("click", openSubmitModal);
@@ -3455,7 +4222,7 @@ async function enterExamView() {
       sb
         .from("tests")
         .select(
-          "id, title, category, duration_minutes, available_from, available_until, is_published",
+          "id, title, category, duration_minutes, available_from, available_until, is_published, practice_enabled",
         )
         .eq("id", selectedTestId)
         .maybeSingle(),
@@ -3473,6 +4240,27 @@ async function enterExamView() {
   // A practice re-attempt is personal revision: it isn't bound by the
   // test's publish/close window (the student already completed the real,
   // scheduled attempt to unlock it in the first place).
+  if (
+    !testMetaError &&
+    testMeta &&
+    testMeta.is_published &&
+    pendingIsPractice &&
+    (Date.now() < new Date(testMeta.available_until).getTime() ||
+      testMeta.practice_enabled === false)
+  ) {
+    const stillLive = Date.now() < new Date(testMeta.available_until).getTime();
+    showTerminal(
+      "Practice isn't available",
+      stillLive
+        ? "Practice opens once the live test has closed."
+        : "Practice mode has been switched off for this test.",
+      "#/tests",
+      "Back to Tests",
+    );
+    document.getElementById("loadingScreen").style.display = "none";
+    return;
+  }
+
   if (
     testMetaError ||
     !testMeta ||
@@ -3506,7 +4294,7 @@ async function enterExamView() {
   ) {
     showTerminal(
       "Test already attempted",
-      "You have already submitted this test. You cannot start it again, but you can view your report or start a practice re-attempt from it.",
+      "You have already submitted this test. You cannot start it again, but you can view your report — and practise it from the Tests page once the test has closed.",
       `#/result?attempt=${previousAttempt.id}`,
       "View your report",
     );
@@ -3937,23 +4725,17 @@ async function doSubmit(reason) {
 
 async function onBegin() {
   myProfile = myProfile || (await getMyProfile());
-  const missingProfileFields = [];
-  if (!myProfile?.full_name?.trim()) missingProfileFields.push("Full name");
-  if (!myProfile?.email?.trim()) missingProfileFields.push("Email");
-  if (!myProfile?.class_grade?.trim())
-    missingProfileFields.push("Class / grade");
-  if (missingProfileFields.length) {
+  if (!(await profileGate())) {
     closeModal("beginModal");
-    toast(
-      `Complete your profile first: ${missingProfileFields.join(", ")}.`,
-      "error",
-    );
-    navigate("/profile?complete=1");
     return;
   }
 
   const beginBtn = document.getElementById("beginBtn");
   const originalBtnText = beginBtn.textContent;
+  const notificationState = await pushNotifications.state();
+  if (notificationState !== "granted") {
+    toast("Notifications are optional. You can enable them from your profile for test reminders.", "info");
+  }
   beginBtn.disabled = true;
   beginBtn.textContent = "Starting…";
 
@@ -4205,64 +4987,11 @@ async function onViolationAck() {
 /* =========================================================================
    7. RESULT VIEW
    ========================================================================= */
-function renderReviewQuestion(r) {
-  let bodyHtml = "";
-  if (r.question_type === "mcq") {
-    bodyHtml =
-      `<div class="option-list">` +
-      (r.options || [])
-        .map((o) => {
-          const isCorrect = o.id === r.correct_option;
-          const isPicked = o.id === r.selected_option;
-          const cls = isCorrect
-            ? "review-correct"
-            : isPicked
-              ? "review-wrong"
-              : "";
-          const tag =
-            isCorrect && isPicked
-              ? `<span class="status-tag published" style="margin-left:auto;">Your answer · Correct</span>`
-              : isCorrect
-                ? `<span class="status-tag published" style="margin-left:auto;">Correct answer</span>`
-                : isPicked
-                  ? `<span class="status-tag" style="margin-left:auto;background:var(--danger-tint);color:var(--danger);">Your answer · Wrong</span>`
-                  : "";
-          return `
-        <div class="option-item ${cls}">
-          <span class="option-letter">${o.id}</span>
-          <span class="option-text">${escapeHtml(o.text)}</span>
-          ${tag}
-        </div>
-      `;
-        })
-        .join("") +
-      `</div>`;
-  } else {
-    bodyHtml = `
-      <p style="font-size:14px;">
-        <span style="color:${r.is_correct ? "var(--success)" : "var(--danger)"};font-weight:650;">Your answer: ${r.integer_answer ?? "—"}</span>
-        &nbsp;·&nbsp;
-        <span style="color:var(--success);font-weight:650;">Correct answer: ${r.correct_integer_value}</span>
-      </p>
-    `;
-  }
-  return `
-    <div class="card" style="box-shadow:none;">
-      <div class="review-question-heading"><div class="list-row-meta">${subjectDot(r.subject)}${escapeHtml(r.subject)} · Question ${r.question_order || ""}</div><span class="review-result-pill ${r.is_correct === true ? "review-result-correct" : r.is_correct === false ? "review-result-wrong" : "review-result-skipped"}">${r.is_correct === true ? "Correct" : r.is_correct === false ? "Wrong" : "Unattempted"} · ${r.marks_obtained} marks</span></div>
-      ${questionImageHtml(r.image_url)}
-      <div class="question-text" style="font-size:14.5px;margin-bottom:12px;">${escapeHtml(r.question_text)}</div>
-      ${bodyHtml}
-      ${r.explanation ? `<div class="explanation-box mt-8">${escapeHtml(r.explanation)}</div>` : ""}
-    </div>
-  `;
-}
-
 /* =========================================================================
    CHART KIT — dependency-free, theme-aware SVG charts.
    Every colour is a CSS variable (or a class in style.css), so the same
    markup renders correctly in both light and dark mode.
    ========================================================================= */
-let chartUid = 0;
 const chNum = (v) => {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
@@ -4295,14 +5024,6 @@ function chMinutesLabel(seconds) {
   if (m < 60) return `${m}m ${String(s % 60).padStart(2, "0")}s`;
   return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
 }
-function chNiceCeil(v) {
-  if (v <= 0) return 10;
-  const pow = Math.pow(10, Math.floor(Math.log10(v)));
-  const n = v / pow;
-  const nice = n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10;
-  return nice * pow;
-}
-
 function chartLegend(items) {
   return `<div class="ch-legend">${items
     .map(
@@ -4460,27 +5181,30 @@ function outcomeLegend(correct, wrong, skipped) {
 const SUPPORT_EMAIL = "shobhitdwivedi.in@gmail.com";
 
 // Pre-filled email so a disqualified student can raise a query in one tap.
-function buildQueryLinks(report) {
+function buildQueryUrl(report) {
   const title = report.test_title || "Test";
+  const profile = myProfile || {};
   const subject = `Query about my disqualified attempt - ${title}`;
   const body = [
     "Hello,",
     "",
-    "I would like to raise a query about my disqualified attempt.",
+    "I would like to raise a query about my disqualified attempt. Details for your review:",
     "",
-    `Name: ${report.full_name || ""}`,
+    `Name: ${report.full_name || profile.full_name || ""}`,
+    `Email: ${profile.email || ""}`,
+    `Mobile: ${profile.mobile_number || ""}`,
     `Test: ${title}`,
+    `Test ID: ${report.test_id || ""}`,
     `Attempt ID: ${report.attempt_id || ""}`,
+    `Started: ${report.started_at ? new Date(report.started_at).toLocaleString() : ""}`,
     `Submitted: ${report.submitted_at ? new Date(report.submitted_at).toLocaleString() : ""}`,
+    `Score: ${report.total_score ?? ""}`,
+    `Reason given by the admin: ${String(report.disqualification_reason || "").trim() || "Not specified"}`,
     "",
     "My query:",
     "",
   ].join("\n");
-  const q = `subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-  return {
-    mailto: `mailto:${SUPPORT_EMAIL}?${q}`,
-    gmail: `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(SUPPORT_EMAIL)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`,
-  };
+  return `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(SUPPORT_EMAIL)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
 function renderReportAnalysis(report, subjectRows, review) {
@@ -4655,7 +5379,19 @@ function renderReviewQuestionCard() {
     question.correct_integer_value == null
       ? "—"
       : question.correct_integer_value;
-  card.innerHTML = `<div class="review-question-heading"><div class="question-number-badge">${subjectDot(question.subject)}${escapeHtml(question.subject)} · Question ${reviewQuestions.indexOf(question) + 1}</div><span class="review-result-pill ${reviewState(question) === "correct" ? "review-result-correct" : reviewState(question) === "wrong" ? "review-result-wrong" : "review-result-skipped"}">${reviewState(question)} · ${question.marks_obtained || 0} marks</span></div>${questionImageHtml(question.image_url)}<div class="question-text">${escapeHtml(question.question_text)}</div>${question.question_type === "mcq" ? `<div class="option-list">${options}</div>` : `<div class="review-integer-answer"><span class="${question.is_correct ? "answer-good" : "answer-bad"}">Your answer: ${escapeHtml(String(integerAnswer))}</span><span class="answer-good">Correct answer: ${escapeHtml(String(correctInteger))}</span></div>`}${question.explanation ? `<div class="explanation-box mt-8">${escapeHtml(question.explanation)}</div>` : ""}`;
+  card.innerHTML = `<div class="review-question-heading"><div class="question-number-badge">${subjectDot(question.subject)}${escapeHtml(question.subject)} · Question ${reviewQuestions.indexOf(question) + 1}</div><span class="review-result-pill ${reviewState(question) === "correct" ? "review-result-correct" : reviewState(question) === "wrong" ? "review-result-wrong" : "review-result-skipped"}">${reviewState(question)} · ${question.marks_obtained || 0} marks</span></div>${questionImageHtml(question.image_url)}<div class="question-text">${escapeHtml(question.question_text)}</div>${question.question_type === "mcq" ? `<div class="option-list">${options}</div>` : `<div class="review-integer-answer"><span class="${question.is_correct ? "answer-good" : "answer-bad"}">Your answer: ${escapeHtml(String(integerAnswer))}</span><span class="answer-good">Correct answer: ${escapeHtml(String(correctInteger))}</span></div>`}${question.explanation ? `<div class="explanation-box mt-8">${escapeHtml(question.explanation)}</div>` : ""}<div class="review-error-action"><button type="button" class="btn btn-sm" id="addReviewErrorBtn">Add to Error Book</button><span id="reviewErrorStatus" class="text-muted"></span></div>`;
+  document.getElementById("addReviewErrorBtn").addEventListener("click", async () => {
+    const { data: { user } } = await sb.auth.getUser();
+    const { error } = await sb.from("error_book_entries").insert({
+      student_id: user?.id,
+      attempt_id: qs("attempt"),
+      question_id: question.id,
+      category: question.is_correct === false ? "Concept gap" : "Other",
+      question_text: question.question_text,
+      comment: null,
+    });
+    document.getElementById("reviewErrorStatus").textContent = error ? friendlyError(error) : "Saved privately.";
+  });
   document.getElementById("reviewProgressLabel").textContent =
     `${reviewQuestions.indexOf(question) + 1} of ${reviewQuestions.length}`;
   document.getElementById("reviewPreviousBtn").disabled = reviewIndex === 0;
@@ -4764,6 +5500,7 @@ async function enterResultView() {
     return;
   }
 
+  myProfile = myProfile || (await getMyProfile()); // pre-fills the "raise a query" email
   const { data: report, error } = await sb.rpc("get_full_report", {
     p_attempt_id: attemptIdParam,
   });
@@ -4793,7 +5530,7 @@ async function enterResultView() {
   // no leaderboard. Everything else on the report stays visible.
   const isDisqualified = !!report.disqualified && !isPractice;
   const dqReason = String(report.disqualification_reason || "").trim();
-  const dqQuery = buildQueryLinks(report);
+  const dqQueryUrl = buildQueryUrl(report);
   const declared =
     !isPractice &&
     !isDisqualified &&
@@ -4831,8 +5568,10 @@ async function enterResultView() {
         ["submitted", "auto_submitted"].includes(report.status)
           ? `<div class="report-actions-row">
               ${
-                !isPractice
-                  ? `<a class="btn btn-sm btn-secondary" href="#/exam?test=${encodeURIComponent(report.test_id)}&practice=1">🔁 Reattempt this test</a>`
+                !isPractice &&
+                report.available_until &&
+                Date.now() >= new Date(report.available_until).getTime()
+                  ? `<a class="btn btn-sm btn-secondary" href="#/exam?test=${encodeURIComponent(report.test_id)}&practice=1">🔁 Practice this test</a>`
                   : ""
               }
             </div>`
@@ -4855,9 +5594,7 @@ async function enterResultView() {
               ${
                 report.is_owner
                   ? `<div class="integrity-actions">
-                      <a class="btn btn-sm integrity-btn" href="${dqQuery.mailto}">✉ Raise a query</a>
-                      <a class="integrity-link" href="${dqQuery.gmail}" target="_blank" rel="noopener">Open in Gmail</a>
-                      <span class="integrity-hint">Think this is a mistake? Email <b>${SUPPORT_EMAIL}</b> — your test and attempt details are filled in for you.</span>
+                      <a class="btn btn-sm integrity-btn" href="${dqQueryUrl}" target="_blank" rel="noopener">✉ Raise a query</a>
                     </div>`
                   : ""
               }
@@ -5366,35 +6103,6 @@ function animateRadialProgress(container) {
   });
 }
 
-// Analytics view is a scaffold in Part 1 — this just proves the radial
-// progress component works. Explicitly labelled as a design preview, not
-// real user data.
-function renderAnalyticsDemo() {
-  const row = document.getElementById("analyticsDemoRow");
-  if (!row || row.dataset.rendered) return;
-  row.dataset.rendered = "1";
-  row.innerHTML =
-    renderRadialProgress(72, {
-      size: 108,
-      stroke: 9,
-      color: "var(--brand)",
-      subLabel: "Accuracy",
-    }) +
-    renderRadialProgress(88, {
-      size: 108,
-      stroke: 9,
-      color: "var(--success)",
-      subLabel: "Answered",
-    }) +
-    renderRadialProgress(46, {
-      size: 108,
-      stroke: 9,
-      color: "var(--review)",
-      subLabel: "Time used",
-    });
-  animateRadialProgress(row);
-}
-
 function analyticsBar(value, max, color) {
   const width =
     max > 0 ? Math.max(0, Math.min(100, (Number(value) / max) * 100)) : 0;
@@ -5504,7 +6212,228 @@ async function enterAnalyticsView() {
     content.innerHTML = `<div class="error-box">${escapeHtml(friendlyError(error) || "Analytics could not be loaded.")}</div>`;
     return;
   }
+  await finishAnalyticsView(content, data);
+}
 
+  function localDateTimeValue(date) {
+    const pad = (value) => String(value).padStart(2, "0");
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  }
+
+  function requestMinimumDate() {
+    const date = new Date();
+    date.setHours(0, 0, 0, 0);
+    date.setDate(date.getDate() + 5);
+    return date;
+  }
+
+  function splitRequestLines(value) {
+    return value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+  }
+
+  function formatRequestStatus(status) {
+    const tone = {
+      Pending: "locked",
+      "Under Review": "review",
+      Approved: "is-on",
+      "Test Created": "is-on",
+      Scheduled: "is-on",
+      Rejected: "closed",
+      Cancelled: "closed",
+    }[status] || "locked";
+    return `<span class="status-tag ${tone}">${escapeHtml(status)}</span>`;
+  }
+
+  async function loadTestRequests() {
+    const target = document.getElementById("testRequestsList");
+    if (!target) return;
+    const { data, error } = await sb.from("test_requests")
+      .select("id, exam, subjects, chapters, topics, difficulty, question_source, question_count, duration_minutes, preferred_at, student_note, status, created_at")
+      .order("created_at", { ascending: false });
+    if (error) {
+      target.innerHTML = `<div class="error-box">${escapeHtml(friendlyError(error))}</div>`;
+      return;
+    }
+    if (!data?.length) {
+      target.innerHTML = `<div class="empty-state">No test requests yet.</div>`;
+      return;
+    }
+    target.innerHTML = data.map((request) => `
+      <article class="request-row">
+        <div><strong>${escapeHtml(request.exam)}</strong><div class="text-muted">${escapeHtml((request.subjects || []).join(", ") || "No subjects selected")} · ${Number(request.question_count)} questions · ${Number(request.duration_minutes)} min</div></div>
+        <div><strong>${formatDateTime(request.preferred_at)}</strong><div>${formatRequestStatus(request.status)}</div></div>
+        <div class="text-muted">${escapeHtml(request.student_note || "No note added")}</div>
+      </article>`).join("");
+  }
+
+  async function enterErrorBookView() {
+    const list = document.getElementById("errorBookList");
+    const summary = document.getElementById("errorBookSummary");
+    const form = document.getElementById("errorBookForm");
+    if (form && !form.dataset.bound) {
+      form.dataset.bound = "1";
+      let voiceRecorder = null;
+      let voiceChunks = [];
+      let recordedVoice = null;
+      const recordButton = document.getElementById("errorVoiceRecord");
+      const stopButton = document.getElementById("errorVoiceStop");
+      const deleteButton = document.getElementById("errorVoiceDelete");
+      const voiceStatus = document.getElementById("errorVoiceStatus");
+      const voicePreview = document.getElementById("errorVoicePreview");
+      const clearRecording = (status = "Recording deleted. You can record again.") => {
+        if (voiceRecorder?.state === "recording") voiceRecorder.stop();
+        if (voicePreview.src) URL.revokeObjectURL(voicePreview.src);
+        recordedVoice = null;
+        voicePreview.hidden = true;
+        voicePreview.removeAttribute("src");
+        deleteButton.disabled = true;
+        voiceStatus.textContent = status;
+      };
+      recordButton.addEventListener("click", async () => {
+        if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+          voiceStatus.textContent = "Voice recording is not supported in this browser.";
+          return;
+        }
+        try {
+          clearRecording("Starting a new recording…");
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          voiceChunks = [];
+          voiceRecorder = new MediaRecorder(stream);
+          voiceRecorder.addEventListener("dataavailable", (event) => {
+            if (event.data.size) voiceChunks.push(event.data);
+          });
+          voiceRecorder.addEventListener("stop", () => {
+            stream.getTracks().forEach((track) => track.stop());
+            recordedVoice = new Blob(voiceChunks, { type: voiceRecorder.mimeType || "audio/webm" });
+            voicePreview.src = URL.createObjectURL(recordedVoice);
+            voicePreview.hidden = false;
+            voiceStatus.textContent = "Voice note recorded. You can listen before saving.";
+            recordButton.disabled = false;
+            stopButton.disabled = true;
+            deleteButton.disabled = false;
+          });
+          voiceRecorder.start();
+          recordButton.disabled = true;
+          stopButton.disabled = false;
+          voiceStatus.textContent = "Recording… speak clearly, then press Stop.";
+        } catch (error) {
+          voiceStatus.textContent = error?.name === "NotAllowedError"
+            ? "Microphone access was denied. Allow microphone access in browser site settings to record."
+            : "Could not start recording. Check your microphone and try again.";
+        }
+      });
+      stopButton.addEventListener("click", () => {
+        if (voiceRecorder?.state === "recording") voiceRecorder.stop();
+      });
+      deleteButton.addEventListener("click", () => clearRecording());
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const message = document.getElementById("errorBookFormMessage");
+        const { data: { user } } = await sb.auth.getUser();
+        if (!user) return;
+        const payload = {
+          student_id: user.id,
+          question_text: document.getElementById("errorQuestionText").value.trim(),
+          category: document.getElementById("errorCategory").value,
+          comment: document.getElementById("errorComment").value.trim() || null,
+        };
+        for (const [inputId, column, prefix, blob] of [["errorImage", "image_path", "images", null], ["errorVoice", "voice_note_path", "voice-notes", recordedVoice]]) {
+          const file = blob || document.getElementById(inputId)?.files?.[0];
+          if (!file) continue;
+          const uploadFile = file instanceof Blob && !file.name ? new File([file], `voice-${Date.now()}.webm`, { type: file.type || "audio/webm" }) : file;
+          const path = `${user.id}/${prefix}/${Date.now()}-${(uploadFile.name || "attachment").replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+          const { error: uploadError } = await sb.storage.from("error-book").upload(path, uploadFile, { upsert: false });
+          if (uploadError) {
+            message.textContent = uploadError.message?.toLowerCase().includes("bucket not found")
+              ? "Attachment storage is not configured yet. Ask the administrator to apply schema_migration.sql in Supabase."
+              : `Attachment upload failed: ${friendlyError(uploadError)}`;
+            return;
+          }
+          payload[column] = path;
+        }
+        const { error } = await sb.from("error_book_entries").insert(payload);
+        message.textContent = error ? friendlyError(error) : "Saved privately.";
+        if (!error) {
+          form.reset();
+          clearRecording("Your browser will ask for microphone access when you start recording.");
+          await enterErrorBookView();
+        }
+      });
+    }
+    const { data, error } = await sb.from("error_book_entries").select("id, attempt_id, question_id, question_text, category, comment, image_path, voice_note_path, resolved, created_at").order("created_at", { ascending: false });
+    if (error) {
+      list.innerHTML = `<div class="error-box">${escapeHtml(friendlyError(error))}</div>`;
+      return;
+    }
+    const counts = (data || []).reduce((map, item) => ({ ...map, [item.category]: (map[item.category] || 0) + 1 }), {});
+    summary.innerHTML = Object.entries(counts).map(([category, count]) => `<div class="home-stat-card"><div class="home-stat-val">${count}</div><div class="home-stat-lbl">${escapeHtml(category)}</div></div>`).join("") || `<div class="empty-state">No saved mistakes yet.</div>`;
+    const attachmentUrls = await Promise.all((data || []).map(async (item) => {
+      const urls = { image: null, voice: null };
+      if (item.image_path) {
+        const { data: signed } = await sb.storage.from("error-book").createSignedUrl(item.image_path, 3600);
+        urls.image = signed?.signedUrl || null;
+      }
+      if (item.voice_note_path) {
+        const { data: signed } = await sb.storage.from("error-book").createSignedUrl(item.voice_note_path, 3600);
+        urls.voice = signed?.signedUrl || null;
+      }
+      return [item.id, urls];
+    }));
+    const attachmentUrlById = new Map(attachmentUrls);
+    list.innerHTML = data?.length ? data.map((item) => {
+      const attachments = attachmentUrlById.get(item.id) || {};
+      return `<article class="error-book-entry ${item.resolved ? "is-resolved" : ""}">
+        <div class="error-book-entry-summary">
+          <strong>${escapeHtml(item.category)}</strong>
+          <span class="text-muted">${item.resolved ? "Resolved" : "Needs review"}</span>
+          <p>${escapeHtml((item.question_text || item.comment || "Saved mistake").slice(0, 110))}${(item.question_text || item.comment || "").length > 110 ? "…" : ""}</p>
+        </div>
+        <div class="error-book-entry-actions">
+          <button class="btn btn-sm" type="button" data-error-view="${item.id}" aria-expanded="false">View details</button>
+          <button class="btn btn-sm" type="button" data-error-edit="${item.id}">Edit</button>
+          <button class="btn btn-sm" type="button" data-error-resolve="${item.id}">${item.resolved ? "Reopen" : "Mark resolved"}</button>
+          <button class="btn btn-sm" type="button" data-error-delete="${item.id}">Delete</button>
+        </div>
+        <div class="error-book-entry-details" data-error-details="${item.id}" hidden>
+          <p class="error-book-question">${escapeHtml(item.question_text || "No question text added.")}</p>
+          <p>${escapeHtml(item.comment || "No personal note added.")}</p>
+          ${attachments.image ? `<img class="error-book-image" src="${escapeHtml(attachments.image)}" alt="Saved Error Book attachment">` : ""}
+          ${attachments.voice ? `<audio class="error-book-audio" controls preload="none" src="${escapeHtml(attachments.voice)}"></audio>` : ""}
+          <small>${item.question_id ? `Question ${escapeHtml(item.question_id)} · Attempt ${escapeHtml(item.attempt_id || "")}` : "Manual entry"}</small>
+        </div>
+      </article>`;
+    }).join("") : `<div class="empty-state">Save a mistake from a report to build your private error book.</div>`;
+    list.querySelectorAll("[data-error-view]").forEach((button) => button.addEventListener("click", () => {
+      const details = list.querySelector(`[data-error-details="${button.dataset.errorView}"]`);
+      const isHidden = details.hidden;
+      details.hidden = !isHidden;
+      button.setAttribute("aria-expanded", String(isHidden));
+      button.textContent = isHidden ? "Hide details" : "View details";
+    }));
+    list.querySelectorAll("[data-error-resolve]").forEach((button) => button.addEventListener("click", async () => {
+      const entry = data.find((item) => item.id === button.dataset.errorResolve);
+      await sb.from("error_book_entries").update({ resolved: !entry.resolved, updated_at: new Date().toISOString() }).eq("id", entry.id);
+      await enterErrorBookView();
+    }));
+    list.querySelectorAll("[data-error-delete]").forEach((button) => button.addEventListener("click", async () => {
+      if (!confirm("Delete this Error Book entry?")) return;
+      const { error: deleteError } = await sb.from("error_book_entries").delete().eq("id", button.dataset.errorDelete);
+      if (deleteError) toast(friendlyError(deleteError), "error");
+      else await enterErrorBookView();
+    }));
+    list.querySelectorAll("[data-error-edit]").forEach((button) => button.addEventListener("click", async () => {
+      const entry = data.find((item) => item.id === button.dataset.errorEdit);
+      const category = prompt("Error category", entry.category);
+      if (category === null) return;
+      const comment = prompt("Personal note", entry.comment || "");
+      if (comment === null) return;
+      const { error: editError } = await sb.from("error_book_entries").update({ category, comment }).eq("id", entry.id);
+      if (editError) toast(friendlyError(editError), "error");
+      else await enterErrorBookView();
+    }));
+  }
+
+async function finishAnalyticsView(content, data) {
   const completedTests = Number(data.summary?.completed_tests || 0);
   if (!completedTests) {
     content.innerHTML = `
@@ -5565,179 +6494,434 @@ function fmtBestScore(v) {
   return Number.isFinite(n) ? `${n.toFixed(3)}%` : "—";
 }
 
-async function enterGlobalLeaderboardView() {
+/* =========================================================================
+   LEADERBOARD — one calendar month at a time (India time), nine categories.
+   The database does the ranking; this only draws it.
+   ========================================================================= */
+const LB_CATEGORIES = [
+  { key: "global", label: "Global" },
+  { key: "jee", label: "JEE" },
+  { key: "jee_advanced", label: "JEE Advanced" },
+  { key: "neet", label: "NEET" },
+  { key: "class_9", label: "Class 9" },
+  { key: "class_10", label: "Class 10" },
+  { key: "class_11", label: "Class 11" },
+  { key: "class_12", label: "Class 12" },
+  { key: "dropper", label: "Dropper" },
+];
+const lbState = { category: "global", period: "current", request: 0 };
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+const PODIUM_MEDALS = ["🥇", "🥈", "🥉"];
+
+// The same month window the database uses (it resets on the 1st, India time).
+function lbPeriodInfo(period, now = new Date()) {
+  const ist = new Date(now.getTime() + IST_OFFSET_MS);
+  const year = ist.getUTCFullYear();
+  const month = ist.getUTCMonth() - (period === "previous" ? 1 : 0);
+  const end = new Date(Date.UTC(year, month + 1, 1) - IST_OFFSET_MS);
+  const monthLabel = new Date(Date.UTC(year, month, 1)).toLocaleDateString("en-IN", {
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+  const resetLabel = new Date(Date.UTC(year, month + 1, 1)).toLocaleDateString("en-IN", {
+    day: "numeric",
+    month: "short",
+    timeZone: "UTC",
+  });
+  return {
+    monthLabel,
+    resetLabel,
+    daysLeft: Math.max(0, Math.ceil((end.getTime() - now.getTime()) / 86400000)),
+  };
+}
+
+const lbCategoryLabel = (key) => LB_CATEGORIES.find((item) => item.key === key)?.label || "Global";
+const lbClassLabel = (key) => (key === "dropper" ? "Dropper" : key ? `Class ${key}` : "");
+const lbInitial = (name) => (name || "?").trim().charAt(0).toUpperCase() || "?";
+
+function lbStatsLine(row) {
+  const tests = Number(row.tests_completed) || 0;
+  return `${tests} test${tests === 1 ? "" : "s"} · ${Number(row.average_accuracy) || 0}% accuracy · best ${fmtBestScore(row.best_score)} · ${formatDurationShort(row.total_time_seconds)}`;
+}
+
+function lbPodiumHtml(rows, myId) {
+  // Left to right: 2nd, 1st, 3rd.
+  return `<div class="lb-podium" aria-label="Top three">${[1, 0, 2]
+    .filter((index) => rows[index])
+    .map((index) => {
+      const row = rows[index];
+      return `<div class="lb-pod place-${index + 1}${row.user_id === myId ? " is-me" : ""}">
+        <span class="lb-pod-avatar">${escapeHtml(lbInitial(row.full_name))}<i>${PODIUM_MEDALS[index]}</i></span>
+        <strong class="lb-pod-name">${escapeHtml(row.full_name || "Student")}</strong>
+        <span class="lb-pod-score">${Number(row.average_score) || 0}%</span>
+        <div class="lb-pod-block"><b>${row.rnk}</b></div>
+      </div>`;
+    })
+    .join("")}</div>`;
+}
+
+function lbRowHtml(row, myId) {
+  const me = row.user_id === myId;
+  const tags = [lbClassLabel(row.class_key), row.target_exam]
+    .filter(Boolean)
+    .map((tag) => `<span class="lb-tag">${escapeHtml(tag)}</span>`)
+    .join("");
+  return `<article class="lb-row${me ? " is-me" : ""}">
+    <span class="lb-rank">${row.rnk}</span>
+    <span class="lb-avatar">${escapeHtml(lbInitial(row.full_name))}</span>
+    <div class="lb-who">
+      <strong>${escapeHtml(row.full_name || "Student")}${me ? '<em class="lb-you">You</em>' : ""}</strong>
+      <small>${tags}${escapeHtml(lbStatsLine(row))}</small>
+    </div>
+    <div class="lb-score"><strong>${Number(row.average_score) || 0}%</strong><small>average</small></div>
+  </article>`;
+}
+
+function lbMyCardHtml(rows, mine) {
+  if (!mine)
+    return `<div class="lb-me is-empty">You're not ranked on this board yet — attempt a live test this month${
+      lbState.category === "global" ? "" : ` (this board is for ${escapeHtml(lbCategoryLabel(lbState.category))} students)`
+    }.</div>`;
+  return `<div class="lb-me"><span>Your rank</span><strong>#${mine.rnk}</strong><small>of ${rows.length} · ${Number(mine.average_score) || 0}% average</small></div>`;
+}
+
+function renderLeaderboard(rows) {
   const content = document.getElementById("leaderboardContent");
+  const info = lbPeriodInfo(lbState.period);
+  if (!rows.length) {
+    content.innerHTML = `<div class="empty-state">No ranked results for <b>${escapeHtml(lbCategoryLabel(lbState.category))}</b> in ${info.monthLabel} yet.<br>Rankings appear once an admin releases a test's results.</div>`;
+    return;
+  }
+  const myId = myProfile?.id;
+  const top = rows.slice(0, 10);
+  const mine = rows.find((row) => row.user_id === myId);
+  const outside = mine && !top.includes(mine);
+  content.innerHTML = `
+    ${lbMyCardHtml(rows, mine)}
+    ${lbPodiumHtml(top.slice(0, 3), myId)}
+    <div class="lb-list">
+      ${top.slice(3).map((row) => lbRowHtml(row, myId)).join("")}
+      ${outside ? `<div class="lb-gap" aria-hidden="true">•••</div>${lbRowHtml(mine, myId)}` : ""}
+    </div>
+    <p class="lb-note">Only released results of real attempts count — practice runs and disqualified attempts never do. The board resets on the 1st of every month.</p>`;
+}
+
+function renderLeaderboardControls() {
+  const info = lbPeriodInfo(lbState.period);
+  document.getElementById("lbCats").innerHTML = LB_CATEGORIES.map(
+    (item) =>
+      `<button type="button" class="lb-chip${item.key === lbState.category ? " active" : ""}" data-category="${item.key}" aria-pressed="${item.key === lbState.category}">${item.label}</button>`,
+  ).join("");
+  document
+    .querySelectorAll("#lbPeriod button")
+    .forEach((button) => button.classList.toggle("active", button.dataset.period === lbState.period));
+  document.getElementById("lbReset").textContent =
+    lbState.period === "current"
+      ? `🗓 ${info.monthLabel} · resets on ${info.resetLabel} (${info.daysLeft} day${info.daysLeft === 1 ? "" : "s"} left)`
+      : `🗓 ${info.monthLabel} · final standings`;
+  document.getElementById("lbSubtitle").textContent =
+    `${lbCategoryLabel(lbState.category)} · ranked by average score of released tests.`;
+}
+
+async function loadLeaderboard() {
+  const content = document.getElementById("leaderboardContent");
+  const request = ++lbState.request;
   content.innerHTML = `<div class="empty-state">Loading leaderboard…</div>`;
-  const { data, error } = await sb.rpc("get_global_leaderboard");
+  const { data, error } = await sb.rpc("get_global_leaderboard", {
+    p_category: lbState.category,
+    p_period: lbState.period,
+  });
+  if (request !== lbState.request) return; // a newer choice replaced this one
   if (error) {
     content.innerHTML = `<div class="error-box">${escapeHtml(friendlyError(error))}</div>`;
     return;
   }
-  if (!data?.length) {
-    content.innerHTML = `<div class="empty-state">The global leaderboard will appear after declared results are available.</div>`;
-    return;
+  renderLeaderboard(data || []);
+}
+
+async function enterGlobalLeaderboardView() {
+  myProfile = myProfile || (await getMyProfile());
+  renderLeaderboardControls();
+  await loadLeaderboard();
+}
+
+function setupLeaderboardListeners() {
+  document.getElementById("lbCats").addEventListener("click", (event) => {
+    const chip = event.target.closest("[data-category]");
+    if (!chip || chip.dataset.category === lbState.category) return;
+    lbState.category = chip.dataset.category;
+    renderLeaderboardControls();
+    loadLeaderboard();
+  });
+  document.getElementById("lbPeriod").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-period]");
+    if (!button || button.dataset.period === lbState.period) return;
+    lbState.period = button.dataset.period;
+    renderLeaderboardControls();
+    loadLeaderboard();
+  });
+}
+
+
+/* =========================================================================
+   PROFILE — every field is required before a student can start a test
+   ========================================================================= */
+const CLASS_OPTIONS = ["Class 9", "Class 10", "Class 11", "Class 12", "Dropper"];
+const GENDER_OPTIONS = ["Female", "Male", "Non-binary", "Other"];
+const EXAM_OPTIONS = ["JEE Main", "JEE Advanced", "NEET", "Olympiads", "Other"];
+const BOARD_OPTIONS = ["CBSE", "ICSE", "State Board", "Other"];
+
+// Older profiles stored the class as free text ("12", "12th", "dropper").
+// Mirrors profile_class_key() in the database.
+function classOptionFor(raw) {
+  const text = String(raw || "").trim();
+  if (/drop|repeat|gap/i.test(text)) return "Dropper";
+  for (const grade of ["12", "11", "10", "9"]) {
+    if (new RegExp(`(^|\\D)${grade}(\\D|$)`).test(text)) return `Class ${grade}`;
   }
+  return "";
+}
 
-  const myId = myProfile?.id;
-  const top10 = data.slice(0, 10);
-  const top3 = data.slice(0, 3);
-  const myRow = data.find((row) => row.user_id === myId);
-  const iAmInTop10 = top10.some((row) => row.user_id === myId);
+const mobileDigits = (value) =>
+  String(value || "").replace(/\D/g, "").replace(/^91(?=\d{10}$)/, "");
+const isoToday = () => new Date().toISOString().slice(0, 10);
+const oneOf = (list) => (value) => list.includes(value);
 
-  const podiumHtml = `<div class="leaderboard-podium">${top3
+// The single source of truth for the profile form, its validation and the
+// "may this student start a test?" gate.
+const PROFILE_FIELDS = [
+  { key: "full_name", id: "profileNameInput", label: "Full name", message: "Enter your full name.", valid: (v) => v.trim().length >= 2 },
+  { key: "email", id: "profileEmailInput", label: "Email", message: "Enter a valid email address.", valid: (v) => /^\S+@\S+\.\S+$/.test(v.trim()) },
+  { key: "mobile_number", id: "profileMobileInput", label: "Mobile number", message: "Enter a 10-digit mobile number.", valid: (v) => /^[6-9]\d{9}$/.test(mobileDigits(v)) },
+  { key: "date_of_birth", id: "profileDobInput", label: "Date of birth", message: "Pick your date of birth.", valid: (v) => v >= "1970-01-01" && v <= isoToday() },
+  { key: "gender", id: "profileGenderInput", label: "Gender", message: "Select your gender.", valid: oneOf(GENDER_OPTIONS) },
+  { key: "class_grade", id: "profileClassInput", label: "Class", message: "Select your class.", valid: oneOf(CLASS_OPTIONS), read: classOptionFor },
+  { key: "target_exam", id: "profileTargetInput", label: "Target exam", message: "Select your target exam.", valid: oneOf(EXAM_OPTIONS) },
+  { key: "board", id: "profileBoardInput", label: "Board", message: "Select your board.", valid: oneOf(BOARD_OPTIONS) },
+];
+
+const storedProfileValue = (profile, field) => {
+  const raw = String(profile?.[field.key] ?? "");
+  return field.read ? field.read(raw) : raw;
+};
+
+function missingProfileFields(profile) {
+  return PROFILE_FIELDS.filter((field) => !field.valid(storedProfileValue(profile, field)));
+}
+
+// Called when a student presses "Begin". Sends them to the profile page —
+// with the first missing field highlighted — until everything is filled in
+// and notifications are allowed. Admins are never blocked.
+async function profileGate() {
+  myProfile = myProfile || (await getMyProfile());
+  if (myProfile?.role === "admin") return true;
+
+  const missing = missingProfileFields(myProfile);
+  if (!missing.length) return true;
+
+  const params = new URLSearchParams({
+    complete: "1",
+    return: window.location.hash || "#/dashboard",
+  });
+  if (missing.length) params.set("field", missing[0].id);
+  toast("Complete your profile first to start the test.", "error");
+  navigate(`/profile?${params}`);
+  return false;
+}
+
+const profileOptions = (values, selected) =>
+  values
     .map(
-      (row, index) =>
-        `<div class="podium-card podium-${index + 1}"><span>${medalFor(index + 1)}</span><strong>${escapeHtml(row.full_name || "Student")}</strong><b>#${row.rnk}</b><small>${row.average_score}% average · ${row.tests_completed} tests</small></div>`,
-    )
-    .join("")}</div>`;
-
-  const rowsHtml = top10
-    .map(
-      (row) => `
-      <tr class="${row.user_id === myId ? "me" : ""}">
-        <td>#${row.rnk}</td>
-        <td>${escapeHtml(row.full_name || "Student")}${row.user_id === myId ? ' <span class="you-badge">YOU</span>' : ""}</td>
-        <td>${row.tests_completed}</td>
-        <td>${row.average_score}%</td>
-        <td>${row.average_accuracy}%</td>
-        <td>${fmtBestScore(row.best_score)}</td>
-        <td>${formatDurationPrecise(row.total_time_seconds)}</td>
-      </tr>`,
+      (value) =>
+        `<option value="${escapeHtml(value)}"${value === selected ? " selected" : ""}>${escapeHtml(value)}</option>`,
     )
     .join("");
 
-  const yourRankCardHtml =
-    !iAmInTop10 && myRow
-      ? `
-    <div class="card your-rank-card" style="margin-top:12px;">
-      <h2 style="font-size:14px;">Your Rank</h2>
-      <p style="font-size:14px;">
-        Rank: #${myRow.rnk} &nbsp;·&nbsp; Tests: ${myRow.tests_completed} &nbsp;·&nbsp;
-        Average score: ${myRow.average_score}% &nbsp;·&nbsp; Accuracy: ${myRow.average_accuracy}% &nbsp;·&nbsp;
-        Best score: ${fmtBestScore(myRow.best_score)} &nbsp;·&nbsp; Total time: ${formatDurationPrecise(myRow.total_time_seconds)}
-      </p>
-    </div>`
-      : "";
-
-  content.innerHTML = `
-    ${podiumHtml}
-    <div class="card leaderboard-table-card">
-      <div class="table-scroll">
-        <table class="report-table">
-          <thead>
-            <tr><th>Rank</th><th>Student</th><th>Tests</th><th>Average score</th><th>Accuracy</th><th>Best score</th><th>Total time</th></tr>
-          </thead>
-          <tbody>${rowsHtml}</tbody>
-        </table>
-      </div>
-    </div>
-    ${yourRankCardHtml}
-  `;
+function profileFieldHtml(field, control) {
+  return `<label class="pf-field" data-field="${field.id}">
+    <span class="pf-label">${field.label} <em aria-hidden="true">*</em></span>
+    ${control}
+    <small class="pf-error" aria-live="polite"></small>
+  </label>`;
 }
 
-async function enterProfilePlaceholder() {
+function profileFormHtml(profile) {
+  const value = (field) => escapeHtml(storedProfileValue(profile, field));
+  const [name, email, mobile, dob, gender, klass, exam, board] = PROFILE_FIELDS;
+  const select = (field, placeholder, values) =>
+    profileFieldHtml(
+      field,
+      `<select id="${field.id}" required><option value="">${placeholder}</option>${profileOptions(values, storedProfileValue(profile, field))}</select>`,
+    );
+  return `<form id="profileEditForm" class="profile-edit-form profile-details-form" novalidate>
+    ${profileFieldHtml(name, `<input type="text" id="${name.id}" value="${value(name)}" maxlength="120" autocomplete="name" required>`)}
+    ${profileFieldHtml(email, `<input type="email" id="${email.id}" value="${value(email)}" autocomplete="email" required>`)}
+    ${profileFieldHtml(mobile, `<input type="tel" id="${mobile.id}" value="${escapeHtml(mobileDigits(profile?.mobile_number))}" inputmode="numeric" autocomplete="tel-national" maxlength="14" placeholder="10-digit mobile number" required>`)}
+    ${profileFieldHtml(dob, `<input type="date" id="${dob.id}" value="${value(dob)}" min="1970-01-01" max="${isoToday()}" required>`)}
+    ${select(gender, "Select gender", GENDER_OPTIONS)}
+    ${select(klass, "Select class", CLASS_OPTIONS)}
+    ${select(exam, "Select target exam", EXAM_OPTIONS)}
+    ${select(board, "Select board", BOARD_OPTIONS)}
+    <div class="pf-notify" id="profileNotify">
+      <div><strong>Notifications <span class="text-muted">(optional)</span></strong><small>Enable reminders and important updates when you want them.</small></div>
+      <span class="pf-notify-status" id="profileNotifyStatus"></span>
+      <button type="button" class="btn btn-sm" id="profileNotifyBtn">Enable notifications</button>
+    </div>
+    <button type="submit" class="btn btn-primary">Save profile</button>
+  </form>`;
+}
+
+function renderProfileNotifyRow(current) {
+  const status = document.getElementById("profileNotifyStatus");
+  const button = document.getElementById("profileNotifyBtn");
+  if (!status || !button) return;
+  const texts = {
+    granted: ["✓ Allowed", "is-on"],
+    default: ["Not allowed yet", "is-off"],
+    denied: ["Blocked in browser", "is-blocked"],
+  };
+  const [text, cls] = texts[current] || ["Unavailable on this device", ""];
+  status.textContent = text;
+  status.className = `pf-notify-status ${cls}`;
+  button.hidden = current === "granted" || current === "unsupported" || current === "unknown";
+  button.textContent = current === "denied" ? "How to unblock" : "Enable notifications";
+}
+
+function highlightProfileTarget(targetId) {
+  const label = document.querySelector(`[data-field="${CSS.escape(targetId)}"]`) || document.getElementById("profileNotify");
+  if (!label) return;
+  label.scrollIntoView({ behavior: "smooth", block: "center" });
+  label.querySelector("input, select")?.focus({ preventScroll: true });
+  label.classList.add("pf-highlight");
+  label.addEventListener("animationend", () => label.classList.remove("pf-highlight"), { once: true });
+}
+
+async function enterProfileView() {
   myProfile = myProfile || (await getMyProfile());
   const name = myProfile?.full_name || "Student";
   const roleLine = myProfile?.role === "admin" ? "Admin" : "JEE Aspirant";
+  const gate = Boolean(qs("complete"));
+  const missing = missingProfileFields(myProfile);
+  const notifications = await pushNotifications.state();
+  const todo = missing.map((field) => field.label);
+  const gateBanner = gate
+    ? `<div class="profile-gate" role="alert">
+        <span class="profile-gate-icon">📝</span>
+        <div>
+          <strong>Complete your profile to start the test</strong>
+          <p>Fill in every required field. You'll be taken straight back to your test.</p>
+          ${todo.length ? `<ul class="profile-gate-list">${todo.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}
+        </div>
+      </div>`
+    : "";
+
   const content = document.getElementById("profileContent");
-  const options = (values) =>
-    values
-      .map(
-        (value) =>
-          `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`,
-      )
-      .join("");
-  content.innerHTML = `<div class="profile-hero"><div class="profile-avatar-large">${escapeHtml(name.trim().charAt(0).toUpperCase() || "S")}</div><div><span class="eyebrow-label">Your account</span><h1>${escapeHtml(name)}</h1><p>${roleLine} · ${escapeHtml(myProfile?.email || "")}</p></div><a class="btn btn-sm" href="#/analytics">Open analytics</a></div><section class="card profile-edit-card"><div class="section-title"><div><span class="eyebrow-label">Required before your first test</span><h2>Student profile</h2></div><span id="profileSaveStatus" class="text-muted"></span></div><form id="profileEditForm" class="profile-edit-form profile-details-form"><label>Full name *<input type="text" id="profileNameInput" value="${escapeHtml(myProfile?.full_name || "")}" maxlength="120" required></label><label>Email *<input type="email" id="profileEmailInput" value="${escapeHtml(myProfile?.email || "")}" required></label><label>Mobile number<input type="tel" id="profileMobileInput" inputmode="tel" autocomplete="tel" placeholder="e.g. 98765 43210" value="${escapeHtml(myProfile?.mobile_number || "")}" maxlength="20"></label><label>Date of birth / age<input type="date" id="profileDobInput" value="${escapeHtml(myProfile?.date_of_birth || "")}"></label><label>Gender (optional)<select id="profileGenderInput"><option value="">Prefer not to say</option>${options(["Female", "Male", "Non-binary", "Other"])}</select></label><label>Class / grade *<input type="text" id="profileClassInput" value="${escapeHtml(myProfile?.class_grade || "")}" maxlength="40" required></label><label>Target exam<select id="profileTargetInput"><option value="">Select target exam</option>${options(["JEE Main", "JEE Advanced", "NEET", "Olympiads", "Other"])}</select></label><label>Board<select id="profileBoardInput"><option value="">Select board</option>${options(["CBSE", "ICSE", "State Board", "Other"])}</select></label><button type="submit" class="btn btn-primary">Save profile</button></form></section><div class="section-title profile-history-heading"><div><span class="eyebrow-label">Your activity</span><h2>Test history</h2></div></div><div id="profileHistory" class="history-list"><div class="empty-state">Loading test history…</div></div>`;
-  if (qs("complete")) {
-    const notice = document.createElement("div");
-    notice.className = "locked-banner profile-required-notice";
-    notice.textContent =
-      "Complete the required fields below before starting your test.";
-    content.insertBefore(notice, content.firstChild);
-  }
-  document.getElementById("profileGenderInput").value = myProfile?.gender || "";
-  document.getElementById("profileTargetInput").value =
-    myProfile?.target_exam || "";
-  document.getElementById("profileBoardInput").value = myProfile?.board || "";
-  document
-    .getElementById("profileEditForm")
-    .addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const button = event.currentTarget.querySelector("button");
-      const nextName = document.getElementById("profileNameInput").value.trim();
-      const nextEmail = document
-        .getElementById("profileEmailInput")
-        .value.trim();
-      const nextClass = document
-        .getElementById("profileClassInput")
-        .value.trim();
-      if (!nextName || !nextEmail || !nextClass) return;
-      button.disabled = true;
-      const { data, error } = await sb
-        .from("profiles")
-        .update({
-          full_name: nextName,
-          email: nextEmail,
-          mobile_number:
-            document.getElementById("profileMobileInput").value.trim() || null,
-          date_of_birth:
-            document.getElementById("profileDobInput").value || null,
-          gender: document.getElementById("profileGenderInput").value || null,
-          class_grade: nextClass,
-          target_exam:
-            document.getElementById("profileTargetInput").value || null,
-          board: document.getElementById("profileBoardInput").value || null,
-        })
-        .eq("id", myProfile.id)
-        .select()
-        .single();
-      button.disabled = false;
-      if (error) {
-        toast(friendlyError(error), "error");
-        return;
-      }
-      myProfile = data;
-      document.getElementById("profileSaveStatus").textContent = "Saved";
-      toast("Profile updated", "success");
-      await syncAppShell(currentRoute.path.slice(1), true);
+  content.innerHTML = `${gateBanner}
+    <div class="profile-hero">
+      <div class="profile-avatar-large">${escapeHtml(name.trim().charAt(0).toUpperCase() || "S")}</div>
+      <div><span class="eyebrow-label">Your account</span><h1>${escapeHtml(name)}</h1><p>${roleLine} · ${escapeHtml(myProfile?.email || "")}</p></div>
+      <a class="btn btn-sm" href="#/analytics">Open analytics</a>
+    </div>
+    <section class="card profile-edit-card">
+      <div class="section-title"><div><span class="eyebrow-label">All fields are required</span><h2>Student profile</h2></div><span id="profileSaveStatus" class="text-muted"></span></div>
+      ${profileFormHtml(myProfile)}
+    </section>
+    <div class="section-title profile-history-heading"><div><span class="eyebrow-label">Your activity</span><h2>Test history</h2></div></div>
+    <div id="profileHistory" class="history-list"><div class="empty-state">Loading test history…</div></div>`;
+
+  const form = document.getElementById("profileEditForm");
+  renderProfileNotifyRow(notifications);
+
+  const afterSave = () => {
+    const back = qs("return");
+    if (back && !missingProfileFields(myProfile).length) navigate(back.replace(/^#/, ""));
+    else toast("Profile saved", "success");
+  };
+  const unsubscribe = pushNotifications.subscribe((current) => {
+    if (!document.body.contains(form)) return unsubscribe();
+    renderProfileNotifyRow(current);
+    if (current === "granted" && !missingProfileFields(myProfile).length) afterSave();
+  });
+
+  document.getElementById("profileNotifyBtn").addEventListener("click", async () => {
+    const current = await pushNotifications.request();
+    renderProfileNotifyRow(current);
+    if (current === "denied") toast(NOTIFICATION_BLOCKED_HELP, "error");
+  });
+
+  const showError = (field, message) => {
+    const label = document.querySelector(`[data-field="${field.id}"]`);
+    label.classList.toggle("has-error", Boolean(message));
+    label.querySelector(".pf-error").textContent = message || "";
+  };
+  form.addEventListener("input", (event) => {
+    const field = PROFILE_FIELDS.find((item) => item.id === event.target.id);
+    if (field) showError(field, "");
+  });
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const values = Object.fromEntries(
+      PROFILE_FIELDS.map((field) => [field.key, document.getElementById(field.id).value]),
+    );
+    const invalid = PROFILE_FIELDS.filter((field) => {
+      const ok = field.valid(values[field.key]);
+      showError(field, ok ? "" : field.message);
+      return !ok;
     });
+    if (invalid.length) {
+      toast("Please fill in every field.", "error");
+      highlightProfileTarget(invalid[0].id);
+      return;
+    }
+
+    const button = form.querySelector("button[type=submit]");
+    button.disabled = true;
+    const { data, error } = await sb
+      .from("profiles")
+      .update({
+        full_name: values.full_name.trim(),
+        email: values.email.trim(),
+        mobile_number: mobileDigits(values.mobile_number),
+        date_of_birth: values.date_of_birth,
+        gender: values.gender,
+        class_grade: values.class_grade,
+        target_exam: values.target_exam,
+        board: values.board,
+      })
+      .eq("id", myProfile.id)
+      .select()
+      .single();
+    button.disabled = false;
+    if (error) {
+      toast(friendlyError(error), "error");
+      return;
+    }
+    myProfile = data;
+    document.getElementById("profileSaveStatus").textContent = "Saved";
+    await syncAppShell("profile", true);
+
+    afterSave();
+  });
+
+  if (gate) {
+    const target = qs("field") || missing[0]?.id || "profileNotify";
+    requestAnimationFrame(() => highlightProfileTarget(target));
+  }
+
   const { data, error } = await sb.rpc("get_student_test_history");
   if (error) {
-    document.getElementById("profileHistory").innerHTML =
-      `<div class="error-box">${escapeHtml(friendlyError(error))}</div>`;
+    document.getElementById("profileHistory").innerHTML = `<div class="error-box">${escapeHtml(friendlyError(error))}</div>`;
     return;
   }
   renderHistoryCards(data || [], "profileHistory");
 }
 
+
 // Shows/hides the signed-in app shell (sidebar on desktop, bottom nav on
 // mobile) and keeps it in sync with the active view + signed-in user.
 // viewName is one of VIEWS (e.g. "dashboard"), or null when signed out.
-async function syncAppShell(viewName, signedIn) {
-  const show = signedIn && APP_SHELL_VIEWS.has(viewName);
-  document.body.classList.toggle("app-shell-on", show);
-  if (!show) return;
-
-  document.querySelectorAll(".app-nav-item, .app-bottom-item").forEach((el) => {
-    el.classList.toggle("active", el.dataset.nav === viewName);
-  });
-
-  myProfile = myProfile || (await getMyProfile());
-  const name = myProfile?.full_name || "Student";
-  const isAdmin = myProfile?.role === "admin";
-
-  const avatarEl = document.getElementById("appSidebarAvatar");
-  const nameEl = document.getElementById("appSidebarUserName");
-  const roleEl = document.getElementById("appSidebarUserRole");
-  const adminLink = document.getElementById("appNavAdmin");
-  const bulkImportLink = document.getElementById("appNavBulkImport");
-  if (avatarEl)
-    avatarEl.textContent = name.trim().charAt(0).toUpperCase() || "S";
-  if (nameEl) nameEl.textContent = name;
-  if (roleEl) roleEl.textContent = isAdmin ? "Admin" : "Student";
-  if (adminLink) adminLink.style.display = isAdmin ? "" : "none";
-  if (bulkImportLink) bulkImportLink.style.display = isAdmin ? "" : "none";
-}
 
 /* =========================================================================
    8. BOOTSTRAP
@@ -5749,11 +6933,13 @@ function setupGlobalListeners() {
 }
 
 setupTheme();
+setupShell();
 setupGlobalListeners();
 setupLandingPage();
 setupAuthListeners();
 setupDashboardListeners();
 setupTestsCatalogListeners();
+setupLeaderboardListeners();
 setupAdminTestListeners();
 setupBulkImportListeners();
 setupExamStaticListeners();
@@ -6016,42 +7202,7 @@ function setupLandingPage() {
 }
 
 /* =========================================================
-   THEME SYSTEM
-   Default: LIGHT
-   Remembers user's choice
-   ========================================================= */
-
-function applyTheme(theme) {
-  const safeTheme = theme === "dark" ? "dark" : "light";
-
-  document.documentElement.setAttribute("data-theme", safeTheme);
-
-  localStorage.setItem("jee_theme", safeTheme);
-
-  const btn = document.getElementById("themeToggle");
-
-  if (btn) {
-    btn.textContent = safeTheme === "dark" ? "☀️" : "🌙";
-
-    btn.setAttribute(
-      "aria-label",
-      safeTheme === "dark" ? "Switch to light theme" : "Switch to dark theme",
-    );
-
-    btn.title =
-      safeTheme === "dark" ? "Switch to light theme" : "Switch to dark theme";
-  }
-}
-
-function toggleTheme() {
-  const current =
-    document.documentElement.getAttribute("data-theme") || "light";
-
-  applyTheme(current === "dark" ? "light" : "dark");
-}
-
-/* =========================================================
-   THEME SYSTEM + DRAGGABLE POSITION
+   THEME SYSTEM (default: light, remembered) + DRAGGABLE POSITION
    ========================================================= */
 
 function applyTheme(theme) {
@@ -6269,4 +7420,4 @@ function setupTheme() {
   applyTheme(savedTheme);
 
   setupThemeDrag();
-}
+} 
